@@ -15,7 +15,7 @@ What this does, end to end:
 Two scenarios make the design lessons concrete:
 
   A. Spatial only. Because geo_sampling selects points by SRS and the allocator
-     only *partitions* them afterwards, the realized sample is SRS — so the
+     only *partitions* them afterwards, the realized sample is SRS. The
      naive SE is well-calibrated and the cluster-robust SE is conservative
      (it over-covers), even though within-itinerary spatial correlation is real.
      This is the Abadie-Athey-Imbens-Wooldridge point on real geometry: the
@@ -46,9 +46,10 @@ from geoinference.simulate import (
     evaluate_scene,
     results_table,
 )
+from geoinference.spatial import dependence_diagnostics
 
 DEFAULT_ROADS = "../allocator/examples/inputs/delhi-roads-1k.csv"
-SE_METHODS = ["naive", "cluster", "wcb"]
+SE_METHODS = ["naive", "cluster"]
 
 
 def _universe(args: argparse.Namespace):
@@ -121,10 +122,10 @@ def main(argv: list[str] | None = None) -> None:
         sample_idx,
         scene,
         cfg_sp,
-        "[A] Spatial-only DGP — coverage of the city mean (nominal 0.95):",
+        "[A] Spatial-only DGP: coverage of the city mean (nominal 0.95):",
     )
     print(
-        "    Expect: naive well-calibrated (SRS selection); cluster/wcb conservative\n"
+        "    Expect: naive well-calibrated (SRS selection); cluster conservative\n"
         "    (within-itinerary correlation is real but does not require clustering)."
     )
 
@@ -146,14 +147,18 @@ def main(argv: list[str] | None = None) -> None:
         frames,
         "n_women",
         "n_people",
-        design=PointDesign(sampling="srs", cluster_var="itinerary_id"),
-        bootstrap=False,
-        lon_var="longitude",
-        lat_var="latitude",
-        time_var="timestamp",
+        design=PointDesign(cluster_var="itinerary_id"),
     )
-    print("\n  One realized survey, full diagnostics:")
+    diagnostics = dependence_diagnostics(
+        p,
+        scene.itinerary_id,
+        lon=lon[sample_idx],
+        lat=lat[sample_idx],
+        timestamps=scene.timestamp_s,
+    )
+    print("\n  One realized survey:")
     print(res.summary())
+    print(f"  Experimental spatial effective N: {diagnostics.n_eff_space:.1f}")
 
     # --- Scenario B: time-of-day bias ---------------------------------------
     cfg_t = SimConfig(
@@ -179,7 +184,7 @@ def main(argv: list[str] | None = None) -> None:
             idx_b,
             scene_b,
             cfg_t,
-            f"[B] Diurnal DGP, {tag} — watch bias & coverage:",
+            f"[B] Diurnal DGP, {tag}: watch bias and coverage:",
         )
     print(
         "    Expect: synchronized starts bias beta hard (low coverage); staggering\n"

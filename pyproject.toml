@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "geoinference"
 version = "0.1.0"
-description = "Design-based inference for spatially distributed observation surveys"
+description = "Inference for equal-probability spatial observation surveys"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -23,6 +23,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Information Analysis",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
 dependencies = [
@@ -32,6 +33,9 @@ dependencies = [
     "pyarrow>=15",
     "scipy>=1.10.0",
 ]
+
+[project.scripts]
+geoinference = "geoinference.io:main"
 
 [project.urls]
 Homepage = "https://github.com/geosensing/geoinference"
@@ -46,19 +50,20 @@ pipeline = ["allocator", "geo-sampling"]
 
 [tool.uv.build-backend]
 module-name = "geoinference"
-module-root = ""
+module-root = "src"
 
 [tool.pyright]
-include = ["geoinference"]
+include = ["src", "tests"]
 typeCheckingMode = "standard"
 
 [tool.pydoclint]
 style = "google"
 arg-type-hints-in-docstring = false
 check-return-types = false
+check-yield-types = false
 check-class-attributes = false
 allow-init-docstring = true
-exclude = '\.venv|geoinference/tests|docs'
+exclude = '\.venv|tests|docs'
 
 [dependency-groups]
 dev = ["ruff>=0.16.2", "pandas-stubs", "scipy-stubs", "pyright>=1.1.390", "pydoclint>=0.5", "pytest>=8"]
@@ -76,11 +81,22 @@ docs = [
     "linkify-it-py>=2.0",
     "sphinx-copybutton>=0.5",
     "sphinx-design>=0.5",
-    "py-canon @ git+https://github.com/gojiplus/py-canon@v1",
+    "soupsieve>=2.9.0",
+    "py-canon @ git+https://github.com/gojiplus/py-canon@v1.3.0",
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["geoinference/tests"]
+minversion = "8"
+testpaths = ["tests"]
+log_level = "INFO"
+xfail_strict = true
+filterwarnings = ["error"]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+
+[tool.coverage.run]
+source = ["src"]
+
+[tool.preen]
 
 [tool.ruff]
 line-length = 88
@@ -106,15 +122,11 @@ allowed-confusables = ["×"]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# Tests live inside the package, not at the repo root. PT009/PT027: the
-# suite is unittest.TestCase throughout, so ruff's pytest-style assertion
-# rules would rewrite 140 assertions for no gain in what they check.
-"geoinference/tests/**" = ["S101", "D", "ARG", "SLF", "PT009", "PT027"]
+"tests/**" = ["S101", "D", "ARG", "SLF"]
 "docs/**" = ["D"]
 # `geoinference.io`'s CLI prints its result; that output is the interface.
-"geoinference/io.py" = ["T201"]
+"src/geoinference/io.py" = ["T201"]
 # `python -m geoinference.simulate` prints its experiment tables.
-"geoinference/simulate.py" = ["T201"]
+"src/geoinference/simulate.py" = ["T201"]
 # Worked examples print their results; that output is the point of them.
 "examples/**" = ["T201", "D"]
-

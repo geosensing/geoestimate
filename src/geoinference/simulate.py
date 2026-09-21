@@ -26,7 +26,7 @@ Key separations the extremes make obvious:
     - Bias comes from SELECTION: spatial coverage gaps and non-representative
       time windows.
     - The coverage cliff (naive SE under compact routing) is an INTERIOR
-      phenomenon — benign at both correlation extremes, worst in the middle.
+      phenomenon: benign at both correlation extremes, worst in the middle.
 
 Everything works in lon/lat with great-circle distances so it exercises the
 same code path as real data.
@@ -36,11 +36,10 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from scipy import stats as sp_stats
 
 from .designs import PointDesign
-from .inference import estimate, wild_cluster_bootstrap_ci
-from .spatial import haversine_matrix
+from .inference import estimate
+from .spatial import dependence_diagnostics, haversine_matrix
 from .types import InferenceResult
 
 
@@ -50,15 +49,10 @@ def _expit(x: np.ndarray) -> np.ndarray:
     return out
 
 
-def _name_seed(name: str) -> int:
-    """Deterministic per-name offset (process-independent, unlike hash())."""
-    return sum(ord(c) for c in name)
-
-
 # ─── Configuration ───────────────────────────────────────────────────
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class SimConfig:
     """Parameters of the space-time DGP and the field operation.
 
@@ -94,11 +88,48 @@ class SimConfig:
         """Number of candidate points per grid side (grid is this squared)."""
         return self.grid_n
 
+    def __post_init__(self) -> None:
+        """Validate the simulation domain."""
+        for name in ("grid_n", "time_grid_n", "n_itineraries", "n_sims"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        if self.grid_n < 2 or self.time_grid_n < 2:
+            raise ValueError("grid_n and time_grid_n must be at least 2")
+        positive = (
+            "extent_deg",
+            "day_min",
+            "shift_min",
+            "speed_m_per_min",
+            "dwell_min",
+        )
+        for name in positive:
+            value = getattr(self, name)
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        finite = (
+            "range_s_m",
+            "sd_s",
+            "base_logit",
+            "range_t_min",
+            "diurnal_amp",
+            "sd_t",
+        )
+        for name in finite:
+            if not np.isfinite(getattr(self, name)):
+                raise ValueError(f"{name} must be finite")
+        if self.range_s_m < 0 or self.sd_s < 0 or self.range_t_min < 0 or self.sd_t < 0:
+            raise ValueError("ranges and standard deviations must be nonnegative")
+        if self.shift_min > self.day_min:
+            raise ValueError("shift_min cannot exceed day_min")
+        if isinstance(self.seed, bool) or not isinstance(self.seed, int):
+            raise TypeError("seed must be an integer")
+
 
 # ─── DGP: draw a space-time population ────────────────────────────────
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Population:
     """One realized space-time population (no measurement noise)."""
 
@@ -111,8 +142,35 @@ class Population:
     base_logit: float
     beta_true: float  # space-time average ratio (the estimand)
 
+    def __post_init__(self) -> None:
+        """Validate aligned geometry and process arrays."""
+        n = len(self.lon)
+        if n < 2 or self.lon.shape != (n,) or self.lat.shape != (n,):
+            raise ValueError(
+                "lon and lat must be aligned vectors with at least two points"
+            )
+        if self.g_s.shape != (n,) or self.dist_m.shape != (n, n):
+            raise ValueError("spatial arrays must align with lon and lat")
+        if self.t_grid.ndim != 1 or self.temporal.shape != self.t_grid.shape:
+            raise ValueError("temporal arrays must be aligned vectors")
+        arrays = (self.lon, self.lat, self.dist_m, self.g_s, self.t_grid, self.temporal)
+        if any(not np.all(np.isfinite(array)) for array in arrays):
+            raise ValueError("population arrays must contain only finite values")
+        if not np.isfinite(self.base_logit) or not 0 <= self.beta_true <= 1:
+            raise ValueError("population scalars are outside their domains")
+
     def p_at(self, idx: np.ndarray, times_min: np.ndarray) -> np.ndarray:
         """True ratio p(s_i, t_i) at points ``idx`` visited at ``times_min``."""
+        idx = np.asarray(idx, dtype=int)
+        times_min = np.asarray(times_min, dtype=float)
+        if idx.ndim != 1 or times_min.ndim != 1 or len(idx) != len(times_min):
+            raise ValueError("idx and times_min must be aligned one-dimensional arrays")
+        if np.any(idx < 0) or np.any(idx >= len(self.lon)):
+            raise ValueError("idx contains a location outside the population")
+        if not np.all(np.isfinite(times_min)):
+            raise ValueError("times_min must contain only finite values")
+        if np.any(times_min < self.t_grid[0]) or np.any(times_min > self.t_grid[-1]):
+            raise ValueError("times_min must lie inside the simulated day")
         tval = np.interp(times_min, self.t_grid, self.temporal)
         return _expit(self.base_logit + self.g_s[idx] + tval)
 
@@ -172,9 +230,19 @@ class PopulationFactory:
         ``grid_n × grid_n`` grid is built from ``cfg``.
         """
         self.cfg = cfg
+        if (lon is None) != (lat is None):
+            raise ValueError("lon and lat must be supplied together")
         if lon is not None and lat is not None:
             self.lon = np.asarray(lon, dtype=float)
             self.lat = np.asarray(lat, dtype=float)
+            if (
+                self.lon.ndim != 1
+                or self.lat.shape != self.lon.shape
+                or len(self.lon) < 2
+            ):
+                raise ValueError(
+                    "lon and lat must be aligned vectors with at least two points"
+                )
         else:
             self.lon, self.lat = _build_grid(cfg)
         self.dist_m = haversine_matrix(self.lon, self.lat)
@@ -212,12 +280,12 @@ class PopulationFactory:
 # ─── Collection pipelines (routing under a time budget) ──────────────
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class Pipeline:
     """A named collection strategy.
 
     Args:
-        routing: How the next point is chosen — "compact" (nearest unvisited),
+        routing: How the next point is chosen. "compact" selects the nearest unvisited,
             "dispersed" (farthest from already-visited, i.e. maximin),
             "systematic" (a fixed space-filling order from a random offset),
             or "srs" (uniformly random next).
@@ -229,11 +297,25 @@ class Pipeline:
     routing: str = "compact"
     staggered_starts: bool = True
 
+    def __post_init__(self) -> None:
+        """Validate the routing strategy and display name."""
+        if not self.name.strip():
+            raise ValueError("name must be non-empty")
+        allowed = {"compact", "dispersed", "systematic", "srs"}
+        if self.routing not in allowed:
+            raise ValueError(f"routing must be one of {sorted(allowed)}")
+
 
 def _systematic_order(pop: Population) -> np.ndarray:
     """A boustrophedon ("snake") ordering of grid points for even coverage."""
-    # Rank by lat band, alternating lon direction per band — works for the grid.
-    return np.lexsort((pop.lon, pop.lat))
+    order: list[int] = []
+    for band, latitude in enumerate(np.unique(pop.lat)):
+        row = np.flatnonzero(pop.lat == latitude)
+        row = row[np.argsort(pop.lon[row])]
+        if band % 2:
+            row = row[::-1]
+        order.extend(row.tolist())
+    return np.asarray(order, dtype=int)
 
 
 def _route(
@@ -320,8 +402,8 @@ def collect(
 
     for k in range(cfg.n_itineraries):
         if pipe.staggered_starts:
-            start_t = cfg.day_min * (k + 0.5) / cfg.n_itineraries
-            start_t = min(start_t, max(0.0, cfg.day_min - cfg.shift_min))
+            feasible_window = cfg.day_min - cfg.shift_min
+            start_t = feasible_window * (k + 0.5) / cfg.n_itineraries
         else:
             start_t = 0.0
         idx, times, dist = _route(pop, pipe, start_t, cfg, rng, systematic_order)
@@ -392,49 +474,29 @@ class PipelineResult:
 
 def _method_ci(
     res: InferenceResult,
-    frames: pd.DataFrame,
     se_method: str,
-    ci_level: float,
-    recommended: str,
-    boot_seed: int,
 ) -> tuple[float, float, float]:
     """Return (se, ci_lo, ci_hi) for one estimate under the chosen SE method.
 
     Shared by the synthetic and scene-based Monte Carlo loops so they treat
-    every SE method identically: naive/cluster/auto use a normal or t_{G-1}
-    critical value, "boot" uses the pairs-bootstrap percentile CI, "wcb" the
-    wild cluster bootstrap percentile-t CI.
+    every SE method identically. ``boot`` uses the pairs-bootstrap percentile
+    interval; clustered analytic inference uses the t interval.
     """
-    if se_method == "wcb":
-        return wild_cluster_bootstrap_ci(
-            frames["n_women"].to_numpy(dtype=float),
-            frames["n_people"].to_numpy(dtype=float),
-            frames["itinerary_id"].to_numpy(),
-            reps=599,
-            ci_level=ci_level,
-            seed=boot_seed,
-        )
     if se_method == "boot":
-        se = res.ratio_se.bootstrap or float("nan")
+        se = res.ratio_se.bootstrap
         ci = res.ratio_ci.bootstrap
-        lo, hi = ci if ci is not None else (float("nan"), float("nan"))
-        return se, lo, hi
-
+        if se is None or ci is None:
+            return float("nan"), float("nan"), float("nan")
+        return se, ci[0], ci[1]
     if se_method == "naive":
-        se = res.ratio_se.naive
-    elif se_method == "cluster":
-        se = res.ratio_se.cluster
-    else:
-        se = res.ratio_se.recommended
-
-    use_cluster = se_method == "cluster" or (
-        se_method == "auto" and recommended == "cluster"
-    )
-    if use_cluster and res.n_clusters >= 2:
-        crit = float(-sp_stats.t.ppf((1 - ci_level) / 2, df=res.n_clusters - 1))
-    else:
-        crit = float(-sp_stats.norm.ppf((1 - ci_level) / 2))
-    return se, res.ratio - crit * se, res.ratio + crit * se
+        interval = res.ratio_ci.normal
+        return res.ratio_se.naive, interval[0], interval[1]
+    if se_method == "cluster":
+        if res.ratio_se.cluster is None or res.ratio_ci.t is None:
+            return float("nan"), float("nan"), float("nan")
+        return res.ratio_se.cluster, res.ratio_ci.t[0], res.ratio_ci.t[1]
+    interval = res.ratio_ci.recommended
+    return res.ratio_se.recommended, interval[0], interval[1]
 
 
 def _aggregate(
@@ -451,6 +513,10 @@ def _aggregate(
 ) -> PipelineResult:
     """Collapse per-sim records into a ``PipelineResult``."""
     diffs_a = np.array(diffs)
+    finite_neff = np.asarray(neff, dtype=float)
+    finite_neff = finite_neff[np.isfinite(finite_neff)]
+    finite_wb = np.asarray(wb, dtype=float)
+    finite_wb = finite_wb[np.isfinite(finite_wb)]
     sd = float(np.std(diffs_a, ddof=1)) if valid > 1 else float("nan")
     return PipelineResult(
         name=name,
@@ -463,8 +529,12 @@ def _aggregate(
         mean_se=float(np.mean(ses)) if ses else float("nan"),
         se_sd_ratio=float(np.mean(ses) / sd) if valid > 1 and sd > 0 else float("nan"),
         coverage=covers / valid if valid else float("nan"),
-        mean_n_eff_space=float(np.nanmean(neff)) if neff else float("nan"),
-        mean_within_between=float(np.nanmean(wb)) if wb else float("nan"),
+        mean_n_eff_space=(
+            float(np.mean(finite_neff)) if finite_neff.size else float("nan")
+        ),
+        mean_within_between=(
+            float(np.mean(finite_wb)) if finite_wb.size else float("nan")
+        ),
     )
 
 
@@ -482,18 +552,22 @@ def run_pipeline(
         factory: Precomputed population factory (geometry + covariance).
         pipe: The collection strategy to simulate (synthetic routing).
         cfg: Simulation configuration (DGP + field operation + Monte Carlo).
-        se_method: Which standard error drives the CI — "auto", "naive",
-            "cluster" (analytic robust with t_{G-1}), "boot" (pairs bootstrap),
-            or "wcb" (wild cluster bootstrap).
+        se_method: Which standard error drives the CI: "auto", "naive",
+            "cluster" (analytic robust with t_{G-1}), or "boot" (pairs bootstrap).
         ci_level: Nominal confidence level.
         spatial_diag: If True, also collect the spatial dependence diagnostics.
 
     Returns:
         A ``PipelineResult`` over ``cfg.n_sims`` simulations.
+
+    Raises:
+        ValueError: If the method or confidence level is unsupported.
     """
-    rng = np.random.default_rng(cfg.seed + _name_seed(pipe.name))
-    design = PointDesign(sampling="srs", cluster_var="itinerary_id")
-    rec = design.recommended_se_method
+    if se_method not in {"auto", "naive", "cluster", "boot"}:
+        raise ValueError("se_method must be 'auto', 'naive', 'cluster', or 'boot'")
+    if not 0 < ci_level < 1:
+        raise ValueError("ci_level must be strictly between 0 and 1")
+    design = PointDesign(cluster_var="itinerary_id")
 
     diffs: list[float] = []
     ses: list[float] = []
@@ -504,9 +578,15 @@ def run_pipeline(
     wb: list[float] = []
     valid = 0
 
-    for _ in range(cfg.n_sims):
-        pop = factory.draw(rng)
-        df = collect(pop, pipe, cfg, rng)
+    for simulation in range(cfg.n_sims):
+        pop_rng = np.random.default_rng(
+            np.random.SeedSequence([cfg.seed, simulation, 0])
+        )
+        route_rng = np.random.default_rng(
+            np.random.SeedSequence([cfg.seed, simulation, 1])
+        )
+        pop = factory.draw(pop_rng)
+        df = collect(pop, pipe, cfg, route_rng)
         if len(df) < cfg.n_itineraries:
             continue
         # se_method is deliberately withheld: the point of the sweep is that
@@ -524,13 +604,8 @@ def run_pipeline(
             ci_level=ci_level,
             bootstrap=(se_method == "boot"),
             bootstrap_reps=599,
-            lon_var="longitude" if spatial_diag else None,
-            lat_var="latitude" if spatial_diag else None,
-            time_var="timestamp" if spatial_diag else None,
         )
-        if np.isnan(res.ratio):
-            continue
-        se, lo, hi = _method_ci(res, df, se_method, ci_level, rec, valid + 1)
+        se, lo, hi = _method_ci(res, se_method)
         if not (np.isfinite(se) and np.isfinite(lo) and np.isfinite(hi)):
             continue
         valid += 1
@@ -540,8 +615,16 @@ def run_pipeline(
         ns.append(float(len(df)))
         dists.append(float(df.attrs["total_dist_m"]) / 1000.0)
         if spatial_diag:
-            neff.append(res.diagnostics.n_eff_space)
-            wb.append(res.diagnostics.within_between_ratio)
+            diag = dependence_diagnostics(
+                df["n_women"].to_numpy(),
+                df["itinerary_id"].to_numpy(),
+                lon=df["longitude"].to_numpy(),
+                lat=df["latitude"].to_numpy(),
+                timestamps=df["timestamp"].to_numpy(),
+                seed=simulation,
+            )
+            neff.append(diag.n_eff_space)
+            wb.append(diag.within_between_ratio)
 
     return _aggregate(
         pipe.name, se_method, diffs, ses, covers, ns, dists, neff, wb, valid
@@ -568,34 +651,49 @@ def evaluate_scene(
     simulation redraws the outcome field, estimates the ratio from the observed
     sample, and checks whether the CI covers the *universe* space-time mean.
     Because the sample is a strict subset of the universe, β̂ carries genuine
-    spatial sampling error — exactly what the cluster SE must capture — so this
+    spatial sampling error. The cluster SE must capture that error, so this
     is a real test of whether ``estimate``'s SE/CI is honest for that design.
 
     Args:
         factory: ``PopulationFactory(cfg, lon, lat)`` built on ALL city points.
         sample_idx: Indices (into the factory universe) of the observed frames.
         itinerary_id: Per-frame cluster labels, aligned to ``sample_idx``.
-        time_of_day_min: Per-frame time-of-day in ``[0, day_min]`` minutes —
+        time_of_day_min: Per-frame time-of-day in ``[0, day_min]`` minutes. This
             drives the diurnal/temporal field component.
         timestamp_s: Per-frame absolute timestamp in seconds across the whole
-            operation — fed to ``estimate`` as ``time_var``.
+            operation, used by the optional temporal diagnostics.
         cfg: Simulation configuration (DGP + Monte Carlo).
         se_method: SE estimator to use, or "auto" to take the design's.
         ci_level: Coverage the interval claims.
         spatial_diag: Whether to accumulate the spatial dependence diagnostics.
-        label: Names the RNG stream / result row.
+        label: Display name for the result row.
 
     Returns:
         A ``PipelineResult`` over ``cfg.n_sims`` field redraws.
+
+    Raises:
+        ValueError: If the method, confidence level, or scene arrays are invalid.
     """
-    rng = np.random.default_rng(cfg.seed + _name_seed(label))
-    design = PointDesign(sampling="srs", cluster_var="itinerary_id")
-    rec = design.recommended_se_method
+    if se_method not in {"auto", "naive", "cluster", "boot"}:
+        raise ValueError("se_method must be 'auto', 'naive', 'cluster', or 'boot'")
+    if not 0 < ci_level < 1:
+        raise ValueError("ci_level must be strictly between 0 and 1")
+    design = PointDesign(cluster_var="itinerary_id")
     idx = np.asarray(sample_idx, dtype=int)
     m = len(idx)
     tod = np.asarray(time_of_day_min, dtype=float)
     itin = np.asarray(itinerary_id)
     ts = np.asarray(timestamp_s, dtype=float)
+    if any(array.ndim != 1 for array in (idx, tod, itin, ts)):
+        raise ValueError("scene arrays must be one-dimensional")
+    if not (len(idx) == len(tod) == len(itin) == len(ts)) or m < 2:
+        raise ValueError("scene arrays must be aligned and contain at least two rows")
+    if np.any(idx < 0) or np.any(idx >= len(factory.lon)):
+        raise ValueError("sample_idx contains an index outside the population")
+    if not np.all(np.isfinite(tod)) or not np.all(np.isfinite(ts)):
+        raise ValueError("scene times must be finite")
+    if pd.isna(itin).any():
+        raise ValueError("itinerary_id cannot contain missing values")
     lon_s = factory.lon[idx]
     lat_s = factory.lat[idx]
 
@@ -606,8 +704,11 @@ def evaluate_scene(
     wb: list[float] = []
     valid = 0
 
-    for _ in range(cfg.n_sims):
-        pop = factory.draw(rng)
+    for simulation in range(cfg.n_sims):
+        pop_rng = np.random.default_rng(
+            np.random.SeedSequence([cfg.seed, simulation, 0])
+        )
+        pop = factory.draw(pop_rng)
         p = pop.p_at(idx, tod)
         frames = pd.DataFrame(
             {
@@ -634,13 +735,8 @@ def evaluate_scene(
             ci_level=ci_level,
             bootstrap=(se_method == "boot"),
             bootstrap_reps=599,
-            lon_var="longitude" if spatial_diag else None,
-            lat_var="latitude" if spatial_diag else None,
-            time_var="timestamp" if spatial_diag else None,
         )
-        if np.isnan(res.ratio):
-            continue
-        se, lo, hi = _method_ci(res, frames, se_method, ci_level, rec, valid + 1)
+        se, lo, hi = _method_ci(res, se_method)
         if not (np.isfinite(se) and np.isfinite(lo) and np.isfinite(hi)):
             continue
         valid += 1
@@ -648,8 +744,16 @@ def evaluate_scene(
         ses.append(se)
         covers += int(lo <= pop.beta_true <= hi)
         if spatial_diag:
-            neff.append(res.diagnostics.n_eff_space)
-            wb.append(res.diagnostics.within_between_ratio)
+            diag = dependence_diagnostics(
+                frames["n_women"].to_numpy(),
+                frames["itinerary_id"].to_numpy(),
+                lon=lon_s,
+                lat=lat_s,
+                timestamps=ts,
+                seed=simulation,
+            )
+            neff.append(diag.n_eff_space)
+            wb.append(diag.within_between_ratio)
 
     return _aggregate(
         label, se_method, diffs, ses, covers, [float(m)], [], neff, wb, valid
@@ -716,7 +820,7 @@ def main() -> None:
 
     print("\n[2] SE coverage vs spatial correlation (compact routing, K=8)")
     compact = Pipeline("compact", routing="compact")
-    print(f"  {'range_s':>8} | {'naive':>6} | {'cluster-t':>9} | {'wcb':>6}")
+    print(f"  {'range_s':>8} | {'naive':>6} | {'cluster-t':>9}")
     for rs in [0, 800, 2000, 6000]:
         cfg = SimConfig(
             range_s_m=float(rs), diurnal_amp=0.0, sd_t=0.0, n_sims=200, grid_n=16
@@ -724,12 +828,9 @@ def main() -> None:
         fac = PopulationFactory(cfg)
         cov = {
             m: run_pipeline(fac, compact, cfg, se_method=m).coverage
-            for m in ("naive", "cluster", "wcb")
+            for m in ("naive", "cluster")
         }
-        print(
-            f"  {rs:>8} | {cov['naive']:>6.2f} | "
-            f"{cov['cluster']:>9.2f} | {cov['wcb']:>6.2f}"
-        )
+        print(f"  {rs:>8} | {cov['naive']:>6.2f} | {cov['cluster']:>9.2f}")
 
     print("\n[3] Temporal bias (strong diurnal): synchronized vs staggered start times")
     cfg = SimConfig(range_s_m=600.0, diurnal_amp=1.5, sd_t=0.0, n_sims=150, grid_n=16)
