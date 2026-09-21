@@ -1,8 +1,8 @@
-"""geoinference: Design-based inference for spatially distributed observation surveys.
+"""Inference for equal-probability spatial observation surveys.
 
-Takes annotated frame data from the geosensing pipeline (geo-sampling + allocator)
-and produces correct point estimates, standard errors, and confidence intervals,
-with the right SE estimator chosen automatically based on the collection design.
+The stable API estimates people-weighted and frame-weighted proportions from
+annotated frames. A design declaration selects independent or cluster-sandwich
+uncertainty estimates.
 
 Quick start:
     >>> import pandas as pd
@@ -12,8 +12,8 @@ Quick start:
     ...     "n_people": [10, 10, 10, 10],
     ...     "itinerary_id": [0, 0, 1, 1],
     ... })
-    >>> design = PointDesign(sampling="srs", cluster_var="itinerary_id")
-    >>> result = estimate(df, "n_women", "n_people", design=design, bootstrap=False)
+    >>> design = PointDesign(cluster_var="itinerary_id")
+    >>> result = estimate(df, "n_women", "n_people", design=design)
     >>> round(result.ratio, 3)
     0.35
 """
