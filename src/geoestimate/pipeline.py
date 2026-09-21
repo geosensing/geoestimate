@@ -1,14 +1,14 @@
-"""Bridge from the real geosensing pipeline to a geoinference simulation scene.
+"""Bridge from the real geosensing pipeline to a geoestimate simulation scene.
 
 This turns the actual ``geo_sampling`` to ``allocator`` output into a fixed
 scene with point coordinates, itinerary membership, and visit times. The scene
-``geoinference.simulate.evaluate_scene`` can validate a DGP against, and that
+``geoestimate.simulate.evaluate_scene`` can validate a DGP against, and that
 mirrors what the annotated frames look like in production.
 
 ``allocator`` and ``geo_sampling`` are optional; install them with
-``pip install geoinference[pipeline]`` (or ``uv pip install -e ../allocator
+``pip install geoestimate[pipeline]`` (or ``uv pip install -e ../allocator
 ../geo_sampling`` for local checkouts). They are imported lazily so core
-geoinference keeps no heavy dependencies.
+geoestimate keeps no heavy dependencies.
 """
 
 from dataclasses import dataclass
@@ -18,7 +18,7 @@ import pandas as pd
 
 from .spatial import haversine_matrix
 
-_PIPELINE_HINT = "install the pipeline extra:  pip install geoinference[pipeline]"
+_PIPELINE_HINT = "install the pipeline extra:  pip install geoestimate[pipeline]"
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,7 +355,7 @@ def subsample_scene(
     ``geo_sampling``), and routes the sample with the allocator. Returns
     ``(sample_idx, scene)`` where ``sample_idx`` indexes the universe (so the
     field can be drawn on the whole city and the sample scored against the city
-    mean in ``geoinference.simulate.evaluate_scene``).
+    mean in ``geoestimate.simulate.evaluate_scene``).
     """
     if isinstance(n_sample, bool) or not isinstance(n_sample, int) or n_sample < 1:
         raise ValueError("n_sample must be a positive integer")

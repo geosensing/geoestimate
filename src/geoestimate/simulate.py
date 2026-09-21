@@ -5,7 +5,7 @@ space-time data-generating process (DGP) with no measurement noise, run real
 collection pipelines (sampling + routing under a fixed per-route time budget)
 on top, push the assumptions to their extremes, and check what happens to the
 bias, standard-error calibration, and confidence-interval coverage that
-``geoinference.estimate`` produces.
+``geoestimate.Sample`` produces.
 
 The analytically-predictable limits (the "truth table"):
 
@@ -36,12 +36,10 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-from scipy import stats as sp_stats
 
-from .designs import PointDesign
-from .inference import estimate
+from .sample import Sample
 from .spatial import dependence_diagnostics, haversine_matrix
-from .types import InferenceResult
+from .types import InferenceMethod
 
 
 def _expit(x: np.ndarray) -> np.ndarray:
@@ -473,44 +471,15 @@ class PipelineResult:
         }
 
 
-def _method_ci(
-    res: InferenceResult,
-    se_method: str,
-) -> tuple[float, float, float]:
-    """Return (se, ci_lo, ci_hi) for one estimate under the chosen SE method.
-
-    Shared by the synthetic and scene-based Monte Carlo loops so they treat
-    every SE method identically. ``boot`` uses the pairs-bootstrap percentile
-    interval; clustered analytic inference uses the t interval.
-    """
-    if se_method == "boot":
-        se = res.ratio_se.bootstrap
-        ci = res.ratio_ci.bootstrap
-        if se is None or ci is None:
-            return float("nan"), float("nan"), float("nan")
-        return se, ci[0], ci[1]
-    if se_method == "naive":
-        se = res.ratio_se.naive
-        alpha = 1 - res.ratio_ci.level
-        critical_value = float(sp_stats.norm.ppf(1 - alpha / 2))
-        return (
-            se,
-            res.ratio - critical_value * se,
-            res.ratio + critical_value * se,
-        )
-    if se_method == "cluster":
-        if res.ratio_se.cluster is None:
-            return float("nan"), float("nan"), float("nan")
-        se = res.ratio_se.cluster
-        alpha = 1 - res.ratio_ci.level
-        critical_value = float(sp_stats.t.ppf(1 - alpha / 2, df=res.n_clusters - 1))
-        return (
-            se,
-            res.ratio - critical_value * se,
-            res.ratio + critical_value * se,
-        )
-    interval = res.ratio_ci.recommended
-    return res.ratio_se.recommended, interval[0], interval[1]
+def _inference_method(se_method: str) -> InferenceMethod:
+    """Translate simulation vocabulary to the stable inference vocabulary."""
+    methods: dict[str, InferenceMethod] = {
+        "auto": "design",
+        "naive": "iid",
+        "cluster": "cluster",
+        "boot": "bootstrap",
+    }
+    return methods[se_method]
 
 
 def _aggregate(
@@ -581,8 +550,6 @@ def run_pipeline(
         raise ValueError("se_method must be 'auto', 'naive', 'cluster', or 'boot'")
     if not 0 < ci_level < 1:
         raise ValueError("ci_level must be strictly between 0 and 1")
-    design = PointDesign(cluster_var="itinerary_id")
-
     diffs: list[float] = []
     ses: list[float] = []
     covers = 0
@@ -603,27 +570,20 @@ def run_pipeline(
         df = collect(pop, pipe, cfg, route_rng)
         if len(df) < cfg.n_itineraries:
             continue
-        # se_method is deliberately withheld: the point of the sweep is that
-        # `estimate` computes every SE from one fit and `_method_ci` picks
-        # afterwards, so the methods are compared on identical draws.
-        # preen: allow-dropped-arg
-        res = estimate(
-            df,
+        res = Sample(df, cluster="itinerary_id").ratio(
             "n_women",
             "n_people",
-            design=design,
-            # Without this the pairs-bootstrap interval read back through
-            # `_method_ci` is `estimate`'s 95% default whatever level was
-            # asked for, so a coverage table at any other level is fiction.
-            ci_level=ci_level,
-            bootstrap=(se_method == "boot"),
+            inference=_inference_method(se_method),
+            confidence_level=ci_level,
             bootstrap_reps=599,
+            seed=simulation,
         )
-        se, lo, hi = _method_ci(res, se_method)
+        se = res.standard_error
+        lo, hi = res.confidence_interval
         if not (np.isfinite(se) and np.isfinite(lo) and np.isfinite(hi)):
             continue
         valid += 1
-        diffs.append(res.ratio - pop.beta_true)
+        diffs.append(res.estimate - pop.beta_true)
         ses.append(se)
         covers += int(lo <= pop.beta_true <= hi)
         ns.append(float(len(df)))
@@ -692,7 +652,6 @@ def evaluate_scene(
         raise ValueError("se_method must be 'auto', 'naive', 'cluster', or 'boot'")
     if not 0 < ci_level < 1:
         raise ValueError("ci_level must be strictly between 0 and 1")
-    design = PointDesign(cluster_var="itinerary_id")
     idx = np.asarray(sample_idx, dtype=int)
     m = len(idx)
     tod = np.asarray(time_of_day_min, dtype=float)
@@ -734,27 +693,20 @@ def evaluate_scene(
                 "timestamp": ts,
             }
         )
-        # se_method is deliberately withheld: the point of the sweep is that
-        # `estimate` computes every SE from one fit and `_method_ci` picks
-        # afterwards, so the methods are compared on identical draws.
-        # preen: allow-dropped-arg
-        res = estimate(
-            frames,
+        res = Sample(frames, cluster="itinerary_id").ratio(
             "n_women",
             "n_people",
-            design=design,
-            # Without this the pairs-bootstrap interval read back through
-            # `_method_ci` is `estimate`'s 95% default whatever level was
-            # asked for, so a coverage table at any other level is fiction.
-            ci_level=ci_level,
-            bootstrap=(se_method == "boot"),
+            inference=_inference_method(se_method),
+            confidence_level=ci_level,
             bootstrap_reps=599,
+            seed=simulation,
         )
-        se, lo, hi = _method_ci(res, se_method)
+        se = res.standard_error
+        lo, hi = res.confidence_interval
         if not (np.isfinite(se) and np.isfinite(lo) and np.isfinite(hi)):
             continue
         valid += 1
-        diffs.append(res.ratio - pop.beta_true)
+        diffs.append(res.estimate - pop.beta_true)
         ses.append(se)
         covers += int(lo <= pop.beta_true <= hi)
         if spatial_diag:
@@ -815,7 +767,7 @@ def default_pipelines() -> list[Pipeline]:
 def main() -> None:
     """Reproduce the headline experiments and print them as tables.
 
-    Run with ``python -m geoinference.simulate``.
+    Run with ``python -m geoestimate.simulate``.
     """
     import warnings
 

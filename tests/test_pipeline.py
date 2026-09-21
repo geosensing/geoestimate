@@ -4,9 +4,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import geoinference.pipeline as pipeline
-from geoinference.io import estimate_from_file, main, read_frames
-from geoinference.pipeline import (
+import geoestimate.pipeline as pipeline
+from geoestimate import Sample
+from geoestimate.io import main
+from geoestimate.pipeline import (
     Scene,
     assign_visit_times,
     make_scene,
@@ -119,7 +120,7 @@ def test_make_scene_defaults_have_capacity_for_default_routes(
     assert scene.n_itineraries == 200
 
 
-def test_file_readers_and_estimator(tmp_path: Path) -> None:
+def test_sample_from_file(tmp_path: Path) -> None:
     frames = pd.DataFrame(
         {
             "n_women": [1, 2, 2, 3],
@@ -131,25 +132,42 @@ def test_file_readers_and_estimator(tmp_path: Path) -> None:
     parquet_path = tmp_path / "frames.parquet"
     frames.to_csv(csv_path, index=False)
     frames.to_parquet(parquet_path, index=False)
-    pd.testing.assert_frame_equal(read_frames(csv_path), frames)
-    pd.testing.assert_frame_equal(read_frames(parquet_path), frames)
-    result = estimate_from_file(parquet_path, cluster_var="itinerary_id")
-    assert result.n_clusters == 2
+    csv_sample = Sample.from_file(csv_path, cluster="itinerary_id")
+    parquet_sample = Sample.from_file(parquet_path, cluster="itinerary_id")
+    assert csv_sample.ratio("n_women", "n_people").estimate == pytest.approx(8 / 17)
+    assert parquet_sample.n_clusters == 2
 
 
 def test_external_parquet_compression_and_unknown_suffix_fail() -> None:
     with pytest.raises(ValueError, match="compressed Parquet"):
-        read_frames("frames.parquet.gz")
+        Sample.from_file("frames.parquet.gz")
     with pytest.raises(ValueError, match="infer file format"):
-        read_frames("frames.json")
+        Sample.from_file("frames.json")
 
 
-def test_cli_prints_requested_level(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["mean", "--variable", "n_people"],
+        ["total", "--variable", "n_people", "--population-size", "40"],
+        ["ratio", "--numerator", "n_women", "--denominator", "n_people"],
+        [
+            "mean-of-ratios",
+            "--numerator",
+            "n_women",
+            "--denominator",
+            "n_people",
+        ],
+    ],
+)
+def test_cli_commands_print_requested_level(
+    arguments: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     path = tmp_path / "frames.csv"
     pd.DataFrame({"n_women": [1, 2, 2, 3], "n_people": [2, 4, 5, 6]}).to_csv(
         path, index=False
     )
-    main(["estimate", str(path), "--ci-level", "0.8"])
-    assert "80% CI" in capsys.readouterr().out
+    main([arguments[0], str(path), *arguments[1:], "--confidence-level", "0.8"])
+    output = capsys.readouterr().out
+    assert "80% confidence interval" in output
+    assert "geoestimate: Estimate" in output

@@ -16,13 +16,13 @@ typecheck:      ## Pyright on the package source
 	uv run pyright
 
 docstrings:     ## Pydoclint on the package source
-	uv run pydoclint src/geoinference
+	uv run pydoclint src/geoestimate
 
 check:          ## Everything CI runs
 	uv run ruff check .
 	uv run ruff format --check .
 	uv run pyright
-	uv run pydoclint src/geoinference
+	uv run pydoclint src/geoestimate
 	uv run pytest
 	uvx preen check --strict
 
@@ -33,7 +33,7 @@ ci-docker:      ## Test each supported Python version in a standard uv image
 	@for version in $(PYTHON_VERSIONS); do \
 		docker run --rm \
 			-v "$$(pwd):/workspace" -w /workspace \
-			-e UV_PROJECT_ENVIRONMENT=/tmp/geoinference-venv \
+			-e UV_PROJECT_ENVIRONMENT=/tmp/geoestimate-venv \
 			-e UV_PYTHON=$$version -e UV_PYTHON_DOWNLOADS=never \
 			"ghcr.io/astral-sh/uv:python$$version-bookworm" \
 			sh -c 'uv sync --all-groups --frozen && uv run pytest' || exit 1; \

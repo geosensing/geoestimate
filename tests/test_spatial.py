@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
 
-from geoinference.spatial import (
+from geoestimate.spatial import (
     dependence_diagnostics,
     effective_n,
     empirical_variogram,
