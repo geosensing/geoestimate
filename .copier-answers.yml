@@ -6,7 +6,7 @@ author_name: Gaurav Sood
 coverage_floor: 80
 default_branch: main
 description: Design-based inference for spatially distributed observation surveys
-needs_cli: false
+needs_cli: true
 org: geosensing
-package_name: geoinference
-project_name: geoinference
+package_name: geoestimate
+project_name: geoestimate

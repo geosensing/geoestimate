@@ -1,8 +1,8 @@
-"""Spatial and temporal dependence diagnostics for geoinference.
+"""Spatial and temporal dependence diagnostics for geoestimate.
 
 These experimental functions measure within-cluster correlation and how fast
 it decays along geographic distance or elapsed time. They describe dependence;
-they do not replace the standard-error estimators in :mod:`geoinference.inference`.
+they do not replace the standard-error estimators in :mod:`geoestimate.inference`.
 other pairwise-distance matrix. They are *diagnostics*: they describe the
 dependence structure (and how much information itineraries cost), they do not
 replace the standard-error estimators in ``inference.py``.

@@ -3,9 +3,9 @@ requires = ["uv_build>=0.12.5,<0.13"]
 build-backend = "uv_build"
 
 [project]
-name = "geoinference"
-version = "0.1.0"
-description = "Inference for equal-probability spatial observation surveys"
+name = "geoestimate"
+version = "0.1.1"
+description = "Design-aware estimation for equal-probability observation samples"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -35,21 +35,21 @@ dependencies = [
 ]
 
 [project.scripts]
-geoinference = "geoinference.io:main"
+geoestimate = "geoestimate.io:main"
 
 [project.urls]
-Homepage = "https://github.com/geosensing/geoinference"
-Repository = "https://github.com/geosensing/geoinference"
-Documentation = "https://geosensing.github.io/geoinference/"
-Issues = "https://github.com/geosensing/geoinference/issues"
+Homepage = "https://github.com/geosensing/geoestimate"
+Repository = "https://github.com/geosensing/geoestimate"
+Documentation = "https://geosensing.github.io/geoestimate/"
+Issues = "https://github.com/geosensing/geoestimate/issues"
 
 [project.optional-dependencies]
-# The real geo_sampling -> allocator pipeline, used by geoinference.pipeline and the
-# validation example. Imported lazily; core geoinference needs none of it.
+# The real geo_sampling to allocator pipeline, used by geoestimate.pipeline and the
+# validation example. Imported lazily; core geoestimate needs none of it.
 pipeline = ["allocator", "geo-sampling"]
 
 [tool.uv.build-backend]
-module-name = "geoinference"
+module-name = "geoestimate"
 module-root = "src"
 
 [tool.pyright]
@@ -124,9 +124,9 @@ convention = "google"
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "D", "ARG", "SLF"]
 "docs/**" = ["D"]
-# `geoinference.io`'s CLI prints its result; that output is the interface.
-"src/geoinference/io.py" = ["T201"]
-# `python -m geoinference.simulate` prints its experiment tables.
-"src/geoinference/simulate.py" = ["T201"]
+# `geoestimate.io`'s CLI prints its result; that output is the interface.
+"src/geoestimate/io.py" = ["T201"]
+# `python -m geoestimate.simulate` prints its experiment tables.
+"src/geoestimate/simulate.py" = ["T201"]
 # Worked examples print their results; that output is the point of them.
 "examples/**" = ["T201", "D"]

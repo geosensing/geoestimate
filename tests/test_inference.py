@@ -1,10 +1,12 @@
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
 from numpy.testing import assert_allclose
+from scipy import stats as sp_stats
 
-from geoinference import PointDesign, WalkDesign, estimate
-from geoinference.inference import _bootstrap_distribution, _ratio_estimator
+from geoestimate import Estimate, Sample
 
 
 @pytest.fixture
@@ -18,237 +20,297 @@ def frames() -> pd.DataFrame:
     )
 
 
-def test_point_design_contract() -> None:
-    independent = PointDesign()
-    clustered = PointDesign(cluster_var="itinerary_id")
-    assert independent.name == "point_equal_probability"
-    assert independent.recommended_se_method == "naive"
-    assert clustered.name == "point_equal_probability_clustered"
-    assert clustered.recommended_se_method == "cluster"
-    with pytest.raises(ValueError, match="non-empty"):
-        PointDesign(cluster_var=" ")
-    with pytest.raises(TypeError):
-        PointDesign(sampling="pps")  # type: ignore[call-arg]
+def test_sample_contract_and_snapshot(frames: pd.DataFrame) -> None:
+    sample = Sample(frames, cluster="itinerary_id")
+    assert sample.n_observations == 6
+    assert sample.n_clusters == 3
+    assert sample.cluster == "itinerary_id"
+    assert "n_observations=6" in repr(sample)
+
+    frames["n_people"] = 100
+    assert sample.mean("n_people").estimate == pytest.approx(25 / 6)
 
 
-def test_walk_design_contract() -> None:
-    design = WalkDesign()
-    assert design.cluster_var == "walk_id"
-    assert design.recommended_se_method == "cluster"
-    with pytest.raises(ValueError, match="non-empty"):
-        WalkDesign(walk_var="")
-    with pytest.raises(TypeError):
-        WalkDesign(spacing_m=10)  # type: ignore[call-arg]
+def test_four_estimands_match_definitions(frames: pd.DataFrame) -> None:
+    sample = Sample(frames)
+    assert sample.mean("n_people").estimate == pytest.approx(25 / 6)
+    assert sample.total("n_people", population_size=60).estimate == pytest.approx(250)
+    assert sample.ratio("n_women", "n_people").estimate == pytest.approx(11 / 25)
+
+    positive = frames.loc[frames["n_people"] > 0]
+    expected = np.mean(positive["n_women"] / positive["n_people"])
+    assert Sample(positive).mean_of_ratios("n_women", "n_people").estimate == (
+        pytest.approx(expected)
+    )
 
 
-def test_estimands_match_definitions(frames: pd.DataFrame) -> None:
-    result = estimate(frames)
-    assert result.ratio == pytest.approx(11 / 25)
-    expected_mean = np.mean([0.5, 0.5, 0.5, 0.2, 0.5])
-    assert result.photo_mean == pytest.approx(expected_mean)
-    assert result.ratio_se.method_used == "naive"
-    assert result.ratio_ci.method_used == "normal"
+def test_iid_mean_and_total_standard_errors_scale(frames: pd.DataFrame) -> None:
+    sample = Sample(frames)
+    mean = sample.mean("n_people")
+    total = sample.total("n_people", population_size=60)
+    expected = float(frames["n_people"].std(ddof=1) / np.sqrt(len(frames)))
+    assert mean.standard_error == pytest.approx(expected)
+    assert total.standard_error == pytest.approx(60 * expected)
+    assert total.confidence_interval == pytest.approx(
+        (
+            60 * mean.confidence_interval[0],
+            60 * mean.confidence_interval[1],
+        )
+    )
 
 
-def test_naive_ratio_se_matches_delta_method(frames: pd.DataFrame) -> None:
-    result = estimate(frames)
+def test_ratio_iid_standard_error_matches_delta_method(
+    frames: pd.DataFrame,
+) -> None:
+    result = Sample(frames).ratio("n_women", "n_people")
     women = frames["n_women"].to_numpy()
     people = frames["n_people"].to_numpy()
-    scores = women - result.ratio * people
+    scores = women - result.estimate * people
     expected = np.sqrt(
         len(frames) * np.sum(scores**2) / ((len(frames) - 1) * people.sum() ** 2)
     )
-    assert result.ratio_se.naive == pytest.approx(expected)
+    assert result.standard_error == pytest.approx(expected)
 
 
-def test_cluster_se_matches_hand_calculation(frames: pd.DataFrame) -> None:
-    design = PointDesign(cluster_var="itinerary_id")
-    result = estimate(frames, design=design)
-    scores = frames["n_women"].to_numpy() - result.ratio * frames["n_people"].to_numpy()
+def test_cluster_standard_error_and_interval_match_hand_calculation(
+    frames: pd.DataFrame,
+) -> None:
+    result = Sample(frames, cluster="itinerary_id").ratio("n_women", "n_people")
+    scores = (
+        frames["n_women"].to_numpy() - result.estimate * frames["n_people"].to_numpy()
+    )
     cluster_scores = np.array(
         [
             scores[frames["itinerary_id"].to_numpy() == label].sum()
             for label in ("a", "b", "c")
         ]
     )
-    expected = np.sqrt(
+    expected_se = np.sqrt(
         3 / 2 * np.sum(cluster_scores**2) / frames["n_people"].sum() ** 2
     )
-    assert result.ratio_se.cluster == pytest.approx(expected)
-    assert result.ratio_se.recommended == pytest.approx(expected)
-    assert result.ratio_ci.method_used == "t"
+    critical = sp_stats.t.ppf(0.975, df=2)
+    assert result.inference_method == "cluster"
+    assert result.standard_error == pytest.approx(expected_se)
+    assert result.confidence_interval == pytest.approx(
+        (
+            result.estimate - critical * expected_se,
+            result.estimate + critical * expected_se,
+        )
+    )
+
+
+def test_r_survey_reference_values(frames: pd.DataFrame) -> None:
+    clustered = Sample(frames, cluster="itinerary_id")
+    assert clustered.mean("n_people").estimate == pytest.approx(4.1666666667)
+    assert clustered.mean("n_people").standard_error == pytest.approx(1.1666666667)
+    assert clustered.total("n_people", population_size=10).estimate == pytest.approx(
+        41.6666666667
+    )
+    assert clustered.total(
+        "n_people", population_size=10
+    ).standard_error == pytest.approx(11.6666666667)
+    assert clustered.ratio("n_women", "n_people").estimate == pytest.approx(0.44)
+    assert clustered.ratio("n_women", "n_people").standard_error == pytest.approx(
+        0.0432
+    )
+
+    positive = frames.loc[frames["n_people"] > 0]
+    mean_ratio = Sample(positive, cluster="itinerary_id").mean_of_ratios(
+        "n_women", "n_people"
+    )
+    assert mean_ratio.estimate == pytest.approx(0.44)
+    assert mean_ratio.standard_error == pytest.approx(0.05499091)
 
 
 def test_rows_and_cluster_names_do_not_change_results(frames: pd.DataFrame) -> None:
-    design = PointDesign(cluster_var="itinerary_id")
-    original = estimate(frames, design=design)
+    original = Sample(frames, cluster="itinerary_id").ratio("n_women", "n_people")
     changed = frames.sample(frac=1, random_state=7).reset_index(drop=True)
     changed["itinerary_id"] = changed["itinerary_id"].map({"a": 12, "b": -4, "c": 99})
-    permuted = estimate(changed, design=design)
+    permuted = Sample(changed, cluster="itinerary_id").ratio("n_women", "n_people")
     assert_allclose(
-        [
-            original.ratio,
-            original.photo_mean,
-            original.ratio_se.recommended,
-            original.photo_mean_se.recommended,
-        ],
-        [
-            permuted.ratio,
-            permuted.photo_mean,
-            permuted.ratio_se.recommended,
-            permuted.photo_mean_se.recommended,
-        ],
+        [original.estimate, original.standard_error],
+        [permuted.estimate, permuted.standard_error],
     )
+
+
+def test_explicit_iid_inference_on_clustered_sample(frames: pd.DataFrame) -> None:
+    sample = Sample(frames, cluster="itinerary_id")
+    result = sample.mean("n_people", inference="iid")
+    assert result.inference_method == "iid"
+    assert result.standard_error == result.diagnostics.iid_standard_error
+    assert result.diagnostics.cluster_standard_error is not None
+
+
+def test_numpy_real_confidence_level_is_supported(frames: pd.DataFrame) -> None:
+    result = Sample(frames).mean(
+        "n_people",
+        confidence_level=np.float32(0.9),  # type: ignore[arg-type]
+    )
+    assert result.confidence_level == pytest.approx(0.9)
 
 
 def test_bootstrap_is_reproducible_and_honors_level(frames: pd.DataFrame) -> None:
-    design = PointDesign(cluster_var="itinerary_id")
-    first = estimate(frames, design=design, bootstrap=True, bootstrap_reps=499, seed=8)
-    second = estimate(frames, design=design, bootstrap=True, bootstrap_reps=499, seed=8)
-    narrow = estimate(
-        frames,
-        design=design,
-        bootstrap=True,
+    sample = Sample(frames, cluster="itinerary_id")
+    first = sample.ratio(
+        "n_women",
+        "n_people",
+        inference="bootstrap",
         bootstrap_reps=499,
         seed=8,
-        ci_level=0.8,
     )
-    assert first.ratio_ci.bootstrap == second.ratio_ci.bootstrap
-    assert first.ratio_se.bootstrap == second.ratio_se.bootstrap
-    assert first.ratio_ci.bootstrap is not None
-    assert narrow.ratio_ci.bootstrap is not None
-    span_95 = first.ratio_ci.bootstrap[1] - first.ratio_ci.bootstrap[0]
-    span_80 = narrow.ratio_ci.bootstrap[1] - narrow.ratio_ci.bootstrap[0]
+    second = sample.ratio(
+        "n_women",
+        "n_people",
+        inference="bootstrap",
+        bootstrap_reps=499,
+        seed=8,
+    )
+    narrow = sample.ratio(
+        "n_women",
+        "n_people",
+        inference="bootstrap",
+        bootstrap_reps=499,
+        seed=8,
+        confidence_level=0.8,
+    )
+    assert first.standard_error == second.standard_error
+    assert first.confidence_interval == second.confidence_interval
+    span_95 = first.confidence_interval[1] - first.confidence_interval[0]
+    span_80 = narrow.confidence_interval[1] - narrow.confidence_interval[0]
     assert span_80 < span_95
 
 
-def test_bootstrap_keeps_defined_draw_with_one_positive_frame() -> None:
-    women = np.array([1.0, 0.0, 0.0])
-    people = np.array([1.0, 0.0, 0.0])
-    labels = np.arange(3)
-    draws = np.array([[0, 1, 2], [1, 2, 2]])
-    estimates = _bootstrap_distribution(
-        women,
-        people,
-        labels,
-        n_clusters=3,
-        estimator=_ratio_estimator,
-        sampled_clusters=draws,
+def test_bootstrap_redraws_undefined_ratio_samples() -> None:
+    data = pd.DataFrame(
+        {
+            "numerator": [1.0, 0.0, 0.0],
+            "denominator": [1.0, 0.0, 0.0],
+        }
     )
-    assert estimates.tolist() == [1.0]
-
-
-def test_explicit_bootstrap_selection(frames: pd.DataFrame) -> None:
-    design = PointDesign(cluster_var="itinerary_id")
-    result = estimate(
-        frames,
-        design=design,
-        bootstrap=True,
-        bootstrap_reps=199,
-        se_method="bootstrap",
+    result = Sample(data).ratio(
+        "numerator",
+        "denominator",
+        inference="bootstrap",
+        bootstrap_reps=20,
+        seed=4,
     )
-    assert result.ratio_se.method_used == "bootstrap"
-    assert result.ratio_ci.method_used == "bootstrap"
-    with pytest.raises(ValueError, match="unavailable"):
-        estimate(
-            frames,
-            design=design,
-            se_method="bootstrap",
-            ci_method="normal",
-        )
-    with pytest.raises(ValueError, match="unavailable"):
-        estimate(frames, design=design, ci_method="bootstrap")
+    assert result.estimate == 1
+    assert result.standard_error == 0
 
 
-def test_cluster_method_requires_cluster_design(frames: pd.DataFrame) -> None:
-    with pytest.raises(ValueError, match="unavailable"):
-        estimate(frames, se_method="cluster")
-    with pytest.raises(ValueError, match="unavailable"):
-        estimate(frames, ci_method="t")
+def test_result_is_immutable_tidy_and_uses_requested_level(
+    frames: pd.DataFrame,
+) -> None:
+    result = Sample(frames).mean("n_people", confidence_level=0.8)
+    assert isinstance(result, Estimate)
+    assert "80% confidence interval" in result.summary()
+    assert "95%" not in result.summary()
+    assert result.to_frame().loc[0, "estimate"] == result.estimate
+    assert result.to_frame().loc[0, "variable"] == "n_people"
+    assert result.to_frame().loc[0, "numerator"] is None
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.estimate = 0  # type: ignore[misc]
 
 
-def test_summary_uses_requested_level(frames: pd.DataFrame) -> None:
-    result = estimate(frames, ci_level=0.8)
-    summary = result.summary()
-    assert "80% CI" in summary
-    assert "95% CI" not in summary
-
-
-@pytest.mark.parametrize("level", [0, 1, -0.1, 1.1, np.nan, np.inf, True])
-def test_invalid_ci_level_fails(frames: pd.DataFrame, level: float) -> None:
-    with pytest.raises(ValueError, match="ci_level"):
-        estimate(frames, ci_level=level)
+@pytest.mark.parametrize("level", [0, 1, -0.1, 1.1, np.nan, np.inf])
+def test_invalid_confidence_level_fails(frames: pd.DataFrame, level: float) -> None:
+    with pytest.raises(ValueError, match="confidence_level"):
+        Sample(frames).mean("n_people", confidence_level=level)
 
 
 @pytest.mark.parametrize("reps", [0, 1, -1])
 def test_invalid_bootstrap_reps_fail(frames: pd.DataFrame, reps: int) -> None:
     with pytest.raises(ValueError, match="bootstrap_reps"):
-        estimate(frames, bootstrap=True, bootstrap_reps=reps)
+        Sample(frames).mean("n_people", bootstrap_reps=reps)
 
 
-def test_bootstrap_reps_type_is_not_coerced(frames: pd.DataFrame) -> None:
+def test_option_types_are_not_coerced(frames: pd.DataFrame) -> None:
+    sample = Sample(frames)
     with pytest.raises(TypeError, match="bootstrap_reps"):
-        estimate(frames, bootstrap=True, bootstrap_reps=20.5)  # type: ignore[arg-type]
+        sample.mean("n_people", bootstrap_reps=20.5)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="seed"):
+        sample.mean("n_people", seed=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="inference"):
+        sample.mean("n_people", inference="guess")  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="inference"):
+        sample.mean("n_people", inference=[])  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="real number"):
+        sample.mean("n_people", confidence_level="0.95")  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="real number"):
+        sample.mean("n_people", confidence_level=True)
+    with pytest.raises(ValueError, match="requires a declared cluster"):
+        sample.mean("n_people", inference="cluster")
 
 
-@pytest.mark.parametrize(
-    ("women", "people", "message"),
-    [
-        ([-1, 0], [1, 1], "nonnegative"),
-        ([2, 0], [1, 1], "cannot exceed"),
-        ([0, 0], [0, 0], "observed person"),
-        ([np.nan, 0], [1, 1], "finite"),
-        ([np.inf, 0], [1, 1], "finite"),
-        ([1, 0], [1, 0], "two frames"),
-    ],
-)
-def test_invalid_count_domains_fail(
-    women: list[float], people: list[float], message: str
-) -> None:
-    data = pd.DataFrame({"n_women": women, "n_people": people})
-    with pytest.raises(ValueError, match=message):
-        estimate(data)
-
-
-def test_empty_and_single_row_data_fail() -> None:
+def test_sample_rejects_invalid_data_and_clusters(frames: pd.DataFrame) -> None:
+    with pytest.raises(TypeError, match="DataFrame"):
+        Sample([])  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="two rows"):
-        estimate(pd.DataFrame(columns=["n_women", "n_people"]))
-    with pytest.raises(ValueError, match="two rows"):
-        estimate(pd.DataFrame({"n_women": [1], "n_people": [2]}))
-
-
-def test_missing_and_nonnumeric_columns_fail(frames: pd.DataFrame) -> None:
-    with pytest.raises(ValueError, match="columns not found"):
-        estimate(frames.drop(columns="n_women"))
-    bad = frames.copy()
-    bad["n_women"] = "bad"
-    with pytest.raises(ValueError, match="numeric"):
-        estimate(bad)
-
-
-def test_cluster_labels_must_exist_and_be_complete(frames: pd.DataFrame) -> None:
-    with pytest.raises(ValueError, match="cluster column"):
-        estimate(frames, design=PointDesign(cluster_var="missing"))
+        Sample(pd.DataFrame({"x": [1]}))
+    with pytest.raises(ValueError, match="non-empty"):
+        Sample(frames, cluster=" ")
+    with pytest.raises(ValueError, match="not found"):
+        Sample(frames, cluster="missing")
     missing = frames.copy()
     missing.loc[0, "itinerary_id"] = None
     with pytest.raises(ValueError, match="missing"):
-        estimate(missing, design=PointDesign(cluster_var="itinerary_id"))
-    one = frames.assign(itinerary_id="same")
-    with pytest.raises(ValueError, match="at least two clusters"):
-        estimate(one, design=PointDesign(cluster_var="itinerary_id"))
+        Sample(missing, cluster="itinerary_id")
+    with pytest.raises(ValueError, match="two clusters"):
+        Sample(frames.assign(itinerary_id="same"), cluster="itinerary_id")
 
 
-def test_photo_mean_requires_positive_frames_in_two_clusters(
-    frames: pd.DataFrame,
+def test_variables_must_exist_and_be_finite_numeric(frames: pd.DataFrame) -> None:
+    sample = Sample(frames)
+    with pytest.raises(ValueError, match="non-empty"):
+        sample.mean("")
+    with pytest.raises(ValueError, match="not found"):
+        sample.mean("missing")
+    with pytest.raises(ValueError, match="numeric"):
+        Sample(frames.assign(label="bad")).mean("label")
+    with pytest.raises(ValueError, match="finite"):
+        Sample(frames.assign(value=np.nan)).mean("value")
+    with pytest.raises(ValueError, match="finite"):
+        Sample(frames.assign(value=np.inf)).mean("value")
+
+
+@pytest.mark.parametrize("population_size", [True, 20.5, "20"])
+def test_total_requires_integer_population_size(
+    frames: pd.DataFrame, population_size: object
 ) -> None:
-    data = frames.copy()
-    data.loc[data["itinerary_id"] != "a", ["n_women", "n_people"]] = 0
-    with pytest.raises(ValueError, match="at least two clusters"):
-        estimate(data, design=PointDesign(cluster_var="itinerary_id"))
+    with pytest.raises(TypeError, match="integer"):
+        Sample(frames).total(
+            "n_people",
+            population_size=population_size,  # type: ignore[arg-type]
+        )
 
 
-def test_method_names_fail_at_boundary(frames: pd.DataFrame) -> None:
-    with pytest.raises(ValueError, match="se_method"):
-        estimate(frames, se_method="guess")
-    with pytest.raises(ValueError, match="ci_method"):
-        estimate(frames, ci_method="guess")
+def test_total_rejects_population_smaller_than_sample(frames: pd.DataFrame) -> None:
+    with pytest.raises(ValueError, match="at least the sample size"):
+        Sample(frames).total("n_people", population_size=5)
+
+
+def test_ratio_denominator_domains(frames: pd.DataFrame) -> None:
+    sample = Sample(frames)
+    with pytest.raises(ValueError, match="nonnegative"):
+        Sample(frames.assign(denominator=[1, 1, 1, 1, 1, -1])).ratio(
+            "n_women", "denominator"
+        )
+    with pytest.raises(ValueError, match="positive sample total"):
+        Sample(frames.assign(denominator=0)).ratio("n_women", "denominator")
+    with pytest.raises(ValueError, match="every denominator to be positive"):
+        sample.mean_of_ratios("n_women", "n_people")
+
+
+def test_diagnostics_match_direct_definitions(frames: pd.DataFrame) -> None:
+    result = Sample(frames, cluster="itinerary_id").mean("n_people")
+    diagnostics = result.diagnostics
+    assert diagnostics.cluster_sizes == (2, 2, 2)
+    assert diagnostics.effective_cluster_count == 3
+    assert diagnostics.cluster_standard_error == result.standard_error
+    assert diagnostics.design_effect is not None
+    assert diagnostics.design_effect == pytest.approx(
+        (result.standard_error / diagnostics.iid_standard_error) ** 2
+    )
+    assert diagnostics.effective_sample_size == pytest.approx(
+        len(frames) / diagnostics.design_effect
+    )

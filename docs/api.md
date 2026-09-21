@@ -1,34 +1,12 @@
-# API reference
-
-## Stable inference API
+# Stable API reference
 
 ```{eval-rst}
-.. autofunction:: geoinference.estimate
-.. autofunction:: geoinference.estimate_from_file
-.. autofunction:: geoinference.read_frames
-
-.. automodule:: geoinference.designs
+.. autoclass:: geoestimate.Sample
    :members:
 
-.. automodule:: geoinference.types
-   :members:
-   :exclude-members: __init__
-```
-
-## Experimental validation API
-
-These modules diagnose dependence and validate collection designs. Their
-interfaces may change before the stable inference API does.
-
-```{eval-rst}
-.. automodule:: geoinference.spatial
+.. autoclass:: geoestimate.Estimate
    :members:
 
-.. automodule:: geoinference.simulate
+.. autoclass:: geoestimate.Diagnostics
    :members:
-   :exclude-members: __init__
-
-.. automodule:: geoinference.pipeline
-   :members:
-   :exclude-members: __init__
 ```

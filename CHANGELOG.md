@@ -4,6 +4,31 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## 0.1.1 - 2026-09-20
+
+### Changed
+
+- Renamed the distribution, import package, command, documentation, and
+  repository from `geoinference` to `geoestimate`.
+- Replaced the proportion-specific entry point with an immutable `Sample`
+  object and scalar `Estimate` results.
+- Added inference for means, population totals with known population size,
+  ratios of totals, and means of row-level ratios.
+- Simplified uncertainty selection to design-based, iid, cluster-sandwich, or
+  pairs-bootstrap inference with matching confidence intervals.
+- Reorganized the documentation around tasks, estimands, sampling assumptions,
+  file workflows, and stable versus experimental APIs.
+
+### Correctness
+
+- Require users to define the analysis domain before estimating row-level
+  ratios with zero denominators.
+- Require a known row-level population size for population totals and state
+  that finite population corrections are not implemented.
+- Validate every estimand's variables and option domains at the public boundary.
+- Cross-check equal-probability analytic standard errors against the R `survey`
+  package under equivalent designs.
+
 ## 0.1.0 - 2026-09-20
 
 ### Added

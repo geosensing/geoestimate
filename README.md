@@ -1,153 +1,134 @@
-# geoinference
+# geoestimate
 
-Inference for equal-probability spatial observation surveys.
+Design-aware estimates for equal-probability observation samples.
 
-[![PyPI](https://img.shields.io/pypi/v/geoinference.svg)](https://pypi.org/project/geoinference/)
-[![CI](https://github.com/geosensing/geoinference/actions/workflows/ci.yml/badge.svg)](https://github.com/geosensing/geoinference/actions/workflows/ci.yml)
-[![Docs](https://github.com/geosensing/geoinference/actions/workflows/docs.yml/badge.svg)](https://geosensing.github.io/geoinference/)
+[![PyPI](https://img.shields.io/pypi/v/geoestimate.svg)](https://pypi.org/project/geoestimate/)
+[![CI](https://github.com/geosensing/geoestimate/actions/workflows/ci.yml/badge.svg)](https://github.com/geosensing/geoestimate/actions/workflows/ci.yml)
+[![Docs](https://github.com/geosensing/geoestimate/actions/workflows/docs.yml/badge.svg)](https://geosensing.github.io/geoestimate/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 
-`geoinference` estimates two proportions from annotated frames and reports iid
-or cluster-sandwich uncertainty. The stable API assumes that observation
-locations have equal selection probabilities. It does not implement PPS, GRTS,
-nonresponse weighting, annotation-subsampling corrections, or finite population
-corrections.
+`geoestimate` estimates means, population totals, ratios of totals, and means
+of row-level ratios. It reports iid, cluster-sandwich, or pairs-bootstrap
+uncertainty. The stable API assumes that rows have equal inclusion
+probabilities.
+
+The package does not implement unequal-probability weights, PPS, GRTS,
+stratification, finite population corrections, nonresponse adjustments,
+annotation-subsampling corrections, or walk-spacing corrections.
 
 ## Install
 
 ```bash
-pip install geoinference
+pip install geoestimate
 ```
 
-## Estimate proportions
+## Estimate from a sample
 
 ```python
 import pandas as pd
 
-from geoinference import PointDesign, estimate
+from geoestimate import Sample
 
 frames = pd.DataFrame(
     {
         "n_women": [3, 4, 2, 5],
         "n_people": [10, 10, 10, 10],
         "itinerary_id": [0, 0, 1, 1],
-        "longitude": [77.20, 77.21, 77.22, 77.23],
-        "latitude": [28.60, 28.61, 28.62, 28.63],
     }
 )
 
-result = estimate(
-    frames,
-    design=PointDesign(cluster_var="itinerary_id"),
-)
-print(result.summary())
+sample = Sample(frames, cluster="itinerary_id")
+
+mean_people = sample.mean("n_people")
+total_people = sample.total("n_people", population_size=50_000)
+people_share = sample.ratio("n_women", "n_people")
+location_share = sample.mean_of_ratios("n_women", "n_people")
+
+print(people_share.summary())
 ```
 
-Declare a cluster column only when clusters are independent sampling or
-collection units. Clustered designs use a cluster-sandwich standard error and a
-Student t interval with cluster degrees of freedom. Omitting the column treats
-rows as independent and uses an iid standard error with a normal interval.
-Clustering is a design decision, not a test selected after inspecting the
-outcomes ([Abadie et al., 2023](https://doi.org/10.1093/qje/qjad005)).
+Declare a cluster only when it identifies independent sampling or collection
+units. A declared cluster makes cluster-sandwich inference with a Student-t
+interval the default. Without a cluster, the default is an iid standard error
+with a normal interval.
 
-## Estimands
+## Choose the estimand
 
-The people-weighted ratio is:
+`mean("n_people")` estimates the average count per population unit. For a
+binary variable, the mean is a population proportion.
+
+`total("n_people", population_size=N)` estimates `N * mean(n_people)`. The
+population size counts the same row-level units represented by the sample. The
+method does not apply a finite population correction.
+
+`ratio("n_women", "n_people")` estimates:
 
 ```text
 sum(n_women) / sum(n_people)
 ```
 
-It estimates the fraction of observed people who are women. A finite-sample
-ratio estimator is generally biased, so the result includes a first-order bias
-diagnostic rather than claiming exact unbiasedness.
+This ratio weights rows by their denominator. Individual denominators may be
+zero, but they must be nonnegative and their sample total must be positive.
 
-The location-weighted result is the mean of `n_women / n_people` over frames
-that contain at least one person. It estimates the mean observed proportion at
-a sampled frame. Empty frames contribute to neither estimand.
+`mean_of_ratios("n_women", "n_people")` estimates:
 
-Counts must be finite and nonnegative, and `n_women` cannot exceed
-`n_people`. The estimator rejects undefined samples, incomplete cluster labels,
-and designs with too few clusters for their requested uncertainty method.
+```text
+mean(n_women / n_people)
+```
 
-## Bootstrap intervals
+This estimand gives every row equal weight. Every denominator must be positive.
+Filter the DataFrame before constructing `Sample` when the target population
+excludes rows with zero denominators.
 
-The analytic interval is the default. Request a pairs bootstrap explicitly:
+## Select inference
+
+The default `inference="design"` follows the declared sample design. You can
+request a method explicitly:
 
 ```python
-result = estimate(
-    frames,
-    design=PointDesign(cluster_var="itinerary_id"),
-    bootstrap=True,
-    bootstrap_reps=2000,
-    se_method="bootstrap",
-    ci_method="bootstrap",
+bootstrap = sample.ratio(
+    "n_women",
+    "n_people",
+    inference="bootstrap",
+    bootstrap_reps=2_000,
     seed=42,
 )
 ```
 
-The bootstrap resamples the declared clusters, or individual rows for an
-independent design. It is not the default small-cluster correction.
+The bootstrap resamples declared clusters, or individual rows when no cluster
+is declared. It reports the standard deviation of the bootstrap estimates and
+a percentile interval. Explicit `inference="iid"` is available as a sensitivity
+comparison for clustered samples.
 
-## Read a frame table
+## Read files and use the command line
+
+`Sample.from_file()` accepts Parquet, CSV, compressed CSV, and TSV files:
 
 ```python
-from geoinference import estimate_from_file
-
-result = estimate_from_file(
-    "frames.parquet",
-    cluster_var="itinerary_id",
-)
+sample = Sample.from_file("frames.parquet", cluster="itinerary_id")
+result = sample.ratio("n_women", "n_people")
 ```
 
-`read_frames` and `estimate_from_file` accept Parquet, CSV, and TSV. CSV and TSV
-may be compressed. Parquet preserves count and timestamp types and is the
-preferred interchange format.
-
-The same operation is available from the shell:
+The command line exposes the same four estimands:
 
 ```bash
-geoinference estimate frames.parquet --cluster-var itinerary_id
+geoestimate mean frames.parquet --variable n_people --cluster itinerary_id
+geoestimate total frames.parquet --variable n_people --population-size 50000
+geoestimate ratio frames.parquet --numerator n_women --denominator n_people
+geoestimate mean-of-ratios frames.parquet --numerator n_women --denominator n_people
 ```
-
-## Walk data
-
-`WalkDesign(walk_var="walk_id")` groups observations by independent walks. It
-does not make a random walk self-weighting. Use it only when the target is the
-encountered-frame population or when selection probabilities have already been
-corrected upstream.
 
 ## Experimental validation tools
 
-`geoinference.spatial`, `geoinference.simulate`, and `geoinference.pipeline`
-are experimental. They are useful for diagnosing dependence and validating a
-collection design, but their interfaces may change before the stable inference
-API does.
+`geoestimate.spatial`, `geoestimate.simulate`, and `geoestimate.pipeline` help
+diagnose dependence and validate collection designs. Their interfaces may
+change before the stable inference API does.
 
-Spatial and temporal dependence diagnostics are separate from estimation:
-
-```python
-from geoinference.spatial import dependence_diagnostics
-
-diagnostics = dependence_diagnostics(
-    frames.loc[frames["n_people"] > 0, "n_women"].to_numpy()
-    / frames.loc[frames["n_people"] > 0, "n_people"].to_numpy(),
-    frames.loc[frames["n_people"] > 0, "itinerary_id"].to_numpy(),
-    lon=frames.loc[frames["n_people"] > 0, "longitude"].to_numpy(),
-    lat=frames.loc[frames["n_people"] > 0, "latitude"].to_numpy(),
-)
-```
-
-Install the optional pipeline dependencies to validate a real
-`geo-sampling` to `allocator` geometry:
+Install the optional pipeline dependencies to validate a real `geo-sampling`
+to `allocator` geometry:
 
 ```bash
-pip install "geoinference[pipeline]"
-```
-
-From a source checkout, run the complete validation example:
-
-```bash
+pip install "geoestimate[pipeline]"
 python examples/validate_with_allocator.py
 ```
 

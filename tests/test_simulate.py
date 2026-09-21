@@ -1,13 +1,10 @@
 import numpy as np
-import pandas as pd
 import pytest
 
-from geoinference import PointDesign, estimate
-from geoinference.simulate import (
+from geoestimate.simulate import (
     Pipeline,
     PopulationFactory,
     SimConfig,
-    _method_ci,
     collect,
     evaluate_scene,
     run_pipeline,
@@ -43,21 +40,6 @@ def test_collection_times_stay_inside_day() -> None:
     frames = collect(population, Pipeline("compact"), cfg, np.random.default_rng(2))
     assert len(frames) >= cfg.n_itineraries
     assert frames["timestamp"].between(0, cfg.day_min * 60).all()
-
-
-def test_method_ci_uses_the_requested_standard_error() -> None:
-    frames = pd.DataFrame(
-        {
-            "n_women": [0.0, 0.0, 1.0, 1.0],
-            "n_people": [1.0, 1.0, 1.0, 1.0],
-            "itinerary_id": [0, 0, 1, 1],
-        }
-    )
-    result = estimate(frames, design=PointDesign(cluster_var="itinerary_id"))
-    se, lower, upper = _method_ci(result, "naive")
-    assert se == pytest.approx(1 / np.sqrt(12))
-    assert lower == pytest.approx(-0.0657928670)
-    assert upper == pytest.approx(1.0657928670)
 
 
 def test_pipeline_display_name_does_not_change_rng_stream() -> None:
