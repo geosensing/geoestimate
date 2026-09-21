@@ -4,6 +4,7 @@ import pytest
 from numpy.testing import assert_allclose
 
 from geoinference import PointDesign, WalkDesign, estimate
+from geoinference.inference import _bootstrap_distribution, _ratio_estimator
 
 
 @pytest.fixture
@@ -119,6 +120,22 @@ def test_bootstrap_is_reproducible_and_honors_level(frames: pd.DataFrame) -> Non
     span_95 = first.ratio_ci.bootstrap[1] - first.ratio_ci.bootstrap[0]
     span_80 = narrow.ratio_ci.bootstrap[1] - narrow.ratio_ci.bootstrap[0]
     assert span_80 < span_95
+
+
+def test_bootstrap_keeps_defined_draw_with_one_positive_frame() -> None:
+    women = np.array([1.0, 0.0, 0.0])
+    people = np.array([1.0, 0.0, 0.0])
+    labels = np.arange(3)
+    draws = np.array([[0, 1, 2], [1, 2, 2]])
+    estimates = _bootstrap_distribution(
+        women,
+        people,
+        labels,
+        n_clusters=3,
+        estimator=_ratio_estimator,
+        sampled_clusters=draws,
+    )
+    assert estimates.tolist() == [1.0]
 
 
 def test_explicit_bootstrap_selection(frames: pd.DataFrame) -> None:

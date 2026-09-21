@@ -36,6 +36,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+from scipy import stats as sp_stats
 
 from .designs import PointDesign
 from .inference import estimate
@@ -489,12 +490,25 @@ def _method_ci(
             return float("nan"), float("nan"), float("nan")
         return se, ci[0], ci[1]
     if se_method == "naive":
-        interval = res.ratio_ci.normal
-        return res.ratio_se.naive, interval[0], interval[1]
+        se = res.ratio_se.naive
+        alpha = 1 - res.ratio_ci.level
+        critical_value = float(sp_stats.norm.ppf(1 - alpha / 2))
+        return (
+            se,
+            res.ratio - critical_value * se,
+            res.ratio + critical_value * se,
+        )
     if se_method == "cluster":
-        if res.ratio_se.cluster is None or res.ratio_ci.t is None:
+        if res.ratio_se.cluster is None:
             return float("nan"), float("nan"), float("nan")
-        return res.ratio_se.cluster, res.ratio_ci.t[0], res.ratio_ci.t[1]
+        se = res.ratio_se.cluster
+        alpha = 1 - res.ratio_ci.level
+        critical_value = float(sp_stats.t.ppf(1 - alpha / 2, df=res.n_clusters - 1))
+        return (
+            se,
+            res.ratio - critical_value * se,
+            res.ratio + critical_value * se,
+        )
     interval = res.ratio_ci.recommended
     return res.ratio_se.recommended, interval[0], interval[1]
 

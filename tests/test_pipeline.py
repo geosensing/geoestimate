@@ -4,8 +4,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import geoinference.pipeline as pipeline
 from geoinference.io import estimate_from_file, main, read_frames
-from geoinference.pipeline import Scene, assign_visit_times, points_from_roads
+from geoinference.pipeline import (
+    Scene,
+    assign_visit_times,
+    make_scene,
+    points_from_roads,
+)
 
 
 def test_points_from_segments_interpolates_interior_points() -> None:
@@ -96,6 +102,21 @@ def test_scene_rejects_misaligned_arrays() -> None:
             timestamp_s=np.array([0.0, 1.0]),
             time_of_day_min=np.array([0.0, 1.0]),
         )
+
+
+def test_make_scene_defaults_have_capacity_for_default_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    points = pd.DataFrame({"longitude": np.zeros(200), "latitude": np.zeros(200)})
+    routes = [[index] for index in range(200)]
+    monkeypatch.setattr(
+        pipeline,
+        "build_itineraries",
+        lambda *args, **kwargs: (points, routes),
+    )
+    scene = make_scene(points)
+    assert len(scene) == 200
+    assert scene.n_itineraries == 200
 
 
 def test_file_readers_and_estimator(tmp_path: Path) -> None:

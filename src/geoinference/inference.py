@@ -94,7 +94,7 @@ def _bootstrap_distribution(
     estimates = np.empty(len(sampled_clusters), dtype=float)
     for index, draw in enumerate(sampled_clusters):
         rows = np.concatenate([cluster_rows[cluster] for cluster in draw])
-        if people[rows].sum() <= 0 or np.count_nonzero(people[rows] > 0) < 2:
+        if people[rows].sum() <= 0:
             estimates[index] = np.nan
         else:
             estimates[index] = estimator(women[rows], people[rows])

@@ -92,7 +92,7 @@ def estimate_from_file(
 
 def main(argv: list[str] | None = None) -> None:
     """Run the command-line interface."""
-    parser = argparse.ArgumentParser(prog="geoinference.io")
+    parser = argparse.ArgumentParser(prog="geoinference")
     subparsers = parser.add_subparsers(dest="command", required=True)
     command = subparsers.add_parser("estimate", help="estimate from a frame table")
     command.add_argument("path")

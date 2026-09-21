@@ -86,7 +86,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--method", default="kmeans_tsp")
     parser.add_argument("--n-sample", type=int, default=400)
     parser.add_argument("--n-itineraries", type=int, default=80)
-    parser.add_argument("--days", type=int, default=14)
+    parser.add_argument("--days", type=int, default=28)
     parser.add_argument("--n-sims", type=int, default=200)
     parser.add_argument("--range-m", type=float, default=800.0)
     args = parser.parse_args(argv)

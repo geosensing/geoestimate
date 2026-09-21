@@ -330,6 +330,11 @@ def make_scene(
     data, routes = build_itineraries(
         points, method=method, n_itineraries=n_itineraries, seed=seed
     )
+    if time_kwargs.get("shifts_per_day") is None:
+        days = time_kwargs.get("days", 14)
+        if isinstance(days, bool) or not isinstance(days, int) or days < 1:
+            raise ValueError("days must be a positive integer")
+        time_kwargs["shifts_per_day"] = int(np.ceil(len(routes) / days))
     return assign_visit_times(data, routes, seed=seed, **time_kwargs)  # type: ignore[arg-type]
 
 

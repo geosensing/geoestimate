@@ -143,6 +143,11 @@ Install the optional pipeline dependencies to validate a real
 
 ```bash
 pip install "geoinference[pipeline]"
+```
+
+From a source checkout, run the complete validation example:
+
+```bash
 python examples/validate_with_allocator.py
 ```
 
