@@ -3,6 +3,7 @@
 Design-aware estimates for equal-probability observation samples.
 
 [![PyPI](https://img.shields.io/pypi/v/geoestimate.svg)](https://pypi.org/project/geoestimate/)
+[![Downloads](https://static.pepy.tech/badge/geoestimate)](https://pepy.tech/projects/geoestimate)
 [![CI](https://github.com/geosensing/geoestimate/actions/workflows/ci.yml/badge.svg)](https://github.com/geosensing/geoestimate/actions/workflows/ci.yml)
 [![Docs](https://github.com/geosensing/geoestimate/actions/workflows/docs.yml/badge.svg)](https://geosensing.github.io/geoestimate/)
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
