@@ -222,7 +222,7 @@ def assign_visit_times(
     """Spread itineraries over a multi-day operation and time every frame.
 
     Each itinerary is a single shift assigned to one (day, slot). Within a
-    shift, visit times accumulate along the route as travel (haversine metres /
+    shift, visit times accumulate along the route as travel (haversine meters /
     ``speed_m_per_min``) plus a per-point ``dwell_min``. Shifts are spread
     round-robin across ``days × shifts_per_day`` so timestamps span the whole
     operation while each shift's frames stay close in time-of-day.
