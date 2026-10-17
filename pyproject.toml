@@ -130,3 +130,6 @@ convention = "google"
 "src/geoestimate/simulate.py" = ["T201"]
 # Worked examples print their results; that output is the point of them.
 "examples/**" = ["T201", "D"]
+
+[tool.codespell]
+builtin = "clear,rare,en-GB_to_en-US"
