@@ -4,6 +4,22 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- `Sample` accepts `weights` and `strata`. Means, ratios, and means of ratios
+  use the weights; `total` without `population_size` is the Horvitz-Thompson
+  total.
+- `Sample.post_stratify` calibrates weights to known population shares and
+  adjusts the variance for the calibration.
+- `Sample.share_at_least` estimates the share of units at or above a threshold.
+- Tests compare weighted, stratified, clustered, and post-stratified estimates
+  and standard errors with R's `survey` package.
+
+### Changed
+
+- Clustered intervals use clusters minus strata degrees of freedom.
+- The bootstrap resamples units within strata.
+
 ## 0.1.1 - 2026-09-20
 
 ### Changed

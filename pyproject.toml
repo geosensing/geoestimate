@@ -5,7 +5,7 @@ build-backend = "uv_build"
 [project]
 name = "geoestimate"
 version = "0.1.1"
-description = "Design-aware estimation for equal-probability observation samples"
+description = "Design-aware estimation for spatial observation samples"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"

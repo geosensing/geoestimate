@@ -1,6 +1,6 @@
 # geoestimate
 
-Design-aware estimates for equal-probability observation samples.
+Design-aware estimates for spatial observation samples.
 
 [![PyPI](https://img.shields.io/pypi/v/geoestimate.svg)](https://pypi.org/project/geoestimate/)
 [![Downloads](https://static.pepy.tech/badge/geoestimate)](https://pepy.tech/projects/geoestimate)
@@ -10,12 +10,15 @@ Design-aware estimates for equal-probability observation samples.
 
 `geoestimate` estimates means, population totals, ratios of totals, and means
 of row-level ratios. It reports iid, cluster-sandwich, or pairs-bootstrap
-uncertainty. The stable API assumes that rows have equal inclusion
-probabilities.
+uncertainty. Rows have equal inclusion probabilities unless you declare
+weights. `Sample` also takes design strata, and `post_stratify` rescales
+weights to known population shares, which is how to adjust for uneven
+nonresponse or for a collection route that over-represents some roads.
 
-The package does not implement unequal-probability weights, PPS, GRTS,
-stratification, finite population corrections, nonresponse adjustments,
-annotation-subsampling corrections, or walk-spacing corrections.
+The package does not implement PPS or GRTS variance estimation, finite
+population corrections, annotation-subsampling corrections, or walk-spacing
+corrections. The weighted, stratified, clustered, and post-stratified standard
+errors are tested against R's `survey` package.
 
 ## Install
 
@@ -60,7 +63,12 @@ binary variable, the mean is a population proportion.
 
 `total("n_people", population_size=N)` estimates `N * mean(n_people)`. The
 population size counts the same row-level units represented by the sample. The
-method does not apply a finite population correction.
+method does not apply a finite population correction. With declared weights,
+`total("n_people")` is the Horvitz-Thompson total, the weighted sum, and takes
+no population size.
+
+`share_at_least("max_db", 100)` estimates the share of population units at or
+above a threshold.
 
 `ratio("n_women", "n_people")` estimates:
 
