@@ -164,16 +164,22 @@ class Sample:
             A new sample with calibrated weights.
 
         Raises:
-            ValueError: If the column or the shares are invalid.
+            ValueError: If the column or the shares are invalid, or the sample
+                is already post-stratified.
         """
+        if self._design.calibration_cells is not None:
+            raise ValueError(
+                "the sample is already post-stratified; calibrating to a second "
+                "set of shares is not supported"
+            )
         self._check_column(self._data, "by", by)
         cells, unique_cells = pd.factorize(self._data[by], sort=False)
         present = set(unique_cells)
         if set(shares) != present:
             raise ValueError(
                 "shares must name exactly the cells present in the sample; "
-                f"sample cells: {sorted(map(str, present))}, "
-                f"shares cells: {sorted(map(str, shares))}"
+                f"sample cells: {sorted(map(repr, present))}, "
+                f"shares cells: {sorted(map(repr, shares))}"
             )
         targets = np.array([float(shares[cell]) for cell in unique_cells])
         if np.any(targets <= 0) or not np.isclose(targets.sum(), 1.0):
@@ -343,7 +349,9 @@ class Sample:
                 raise TypeError("population_size must be an integer")
             if population_size < len(self._data):
                 raise ValueError("population_size must be at least the sample size")
-            estimand = _prepare_total(values, variable, population_size)
+            estimand = _prepare_total(
+                values, variable, population_size, self._design.weights
+            )
         return self._run(
             estimand,
             inference=inference,

@@ -18,7 +18,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - Clustered intervals use clusters minus strata degrees of freedom.
-- The bootstrap resamples units within strata.
+- Bootstrap inference raises for stratified and post-stratified samples.
 
 ## 0.1.1 - 2026-09-20
 

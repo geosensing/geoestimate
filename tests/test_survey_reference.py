@@ -89,8 +89,30 @@ def test_invalid_declarations_are_rejected(data: pd.DataFrame) -> None:
         calibrated.mean("level", inference="bootstrap")
 
 
-def test_stratified_bootstrap_is_close_to_linearization(data: pd.DataFrame) -> None:
+def test_bootstrap_is_refused_for_stratified_samples(data: pd.DataFrame) -> None:
     sample = Sample(data, weights="w", strata="stratum", cluster="psu")
+    with pytest.raises(ValueError, match="stratified"):
+        sample.ratio("y", "z", inference="bootstrap", seed=1)
+
+
+def test_weighted_bootstrap_is_close_to_linearization(data: pd.DataFrame) -> None:
+    sample = Sample(data, weights="w", cluster="psu")
     analytic = sample.ratio("y", "z")
     bootstrap = sample.ratio("y", "z", inference="bootstrap", seed=1)
     assert bootstrap.standard_error == pytest.approx(analytic.standard_error, rel=0.25)
+
+
+def test_unweighted_total_uses_post_stratified_weights(data: pd.DataFrame) -> None:
+    """Population size times the calibrated mean, not the raw mean."""
+    calibrated = Sample(data).post_stratify("cell", REFERENCE["shares"])
+    total = calibrated.total("y", population_size=10_000)
+    mean = calibrated.mean("y")
+    assert total.estimate == pytest.approx(10_000 * mean.estimate)
+    assert total.standard_error == pytest.approx(10_000 * mean.standard_error)
+    assert total.estimate != pytest.approx(10_000 * data["y"].mean())
+
+
+def test_second_post_stratification_is_refused(data: pd.DataFrame) -> None:
+    calibrated = Sample(data).post_stratify("cell", REFERENCE["shares"])
+    with pytest.raises(ValueError, match="already post-stratified"):
+        calibrated.post_stratify("stratum", {"a": 0.4, "b": 0.3, "c": 0.3})

@@ -1,4 +1,12 @@
-"""Shared point-estimation and uncertainty machinery."""
+"""Shared point-estimation and uncertainty machinery.
+
+The linearization is written here rather than delegated to a survey library.
+Checked November 2026: ``samplics`` announces on import that it is archived,
+and its post-stratified standard errors treat calibrated weights as fixed, so
+they differ from R's ``survey``; its successor ``svy`` is in beta with a
+release every few days. ``tests/test_survey_reference.py`` holds this code to
+R's ``survey`` instead.
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -62,16 +70,26 @@ def _prepare_mean(
 
 
 def _prepare_total(
-    values: np.ndarray, variable: str, population_size: int
+    values: np.ndarray, variable: str, population_size: int, weights: np.ndarray
 ) -> _PreparedEstimand:
-    mean = float(np.mean(values))
-    n = len(values)
+    """Population size times the weighted mean.
+
+    The weights are all one unless the sample was post-stratified.
+    """
+    weight_total = float(np.sum(weights))
+    mean = float(np.sum(weights * values) / weight_total)
+
+    def evaluate(rows: np.ndarray) -> float:
+        draw_weights = weights[rows]
+        draw_mean = np.sum(draw_weights * values[rows]) / np.sum(draw_weights)
+        return float(population_size * draw_mean)
+
     return _PreparedEstimand(
         name="total",
         variables=(variable,),
         estimate=population_size * mean,
-        contributions=population_size * (values - mean) / n,
-        evaluate=lambda rows: float(population_size * np.mean(values[rows])),
+        contributions=population_size * weights * (values - mean) / weight_total,
+        evaluate=evaluate,
         population_size=population_size,
     )
 
@@ -182,23 +200,14 @@ def _bootstrap_distribution(
     reps: int,
     seed: int | None,
 ) -> np.ndarray:
-    """Return exactly ``reps`` valid pairs-bootstrap estimates.
-
-    Units are resampled with replacement within each stratum.
-    """
+    """Return exactly ``reps`` valid pairs-bootstrap estimates."""
     rng = np.random.default_rng(seed)
     unit_rows = [np.flatnonzero(design.units == unit) for unit in range(design.n_units)]
-    stratum_units = [
-        np.flatnonzero(design.unit_strata == stratum)
-        for stratum in range(design.n_strata)
-    ]
     estimates: list[float] = []
     attempts = 0
     max_attempts = 2 * reps
     while len(estimates) < reps and attempts < max_attempts:
-        draw = np.concatenate(
-            [rng.choice(units, size=len(units)) for units in stratum_units]
-        )
+        draw = rng.integers(0, design.n_units, size=design.n_units)
         rows = np.concatenate([unit_rows[unit] for unit in draw])
         value = estimand.evaluate(rows)
         if np.isfinite(value):
@@ -304,6 +313,12 @@ def _run_inference(
         if design.calibration_cells is not None:
             raise ValueError(
                 "bootstrap inference is not available for post-stratified samples"
+            )
+        if design.n_strata > 1:
+            # Resampling within strata understates variance when strata hold
+            # few units, unless the weights are rescaled draw by draw.
+            raise ValueError(
+                "bootstrap inference is not available for stratified samples"
             )
         draws = _bootstrap_distribution(estimand, design, bootstrap_reps, seed)
         standard_error = float(np.std(draws, ddof=1))
