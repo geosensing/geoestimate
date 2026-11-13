@@ -20,8 +20,17 @@ declares the design:
 are rescaled so each cell has its known population share. Use it when the
 sample's mix differs from the population's for a reason the design did not
 intend, such as nonresponse that varies by road class. Variance then counts
-only each row's departure from its cell's weighted mean. A sample can be
-post-stratified once; calibrating to a second set of shares raises.
+only each row's departure from its cell's weighted mean. The shares fix the
+mix of cells and not the population size, so a weighted total keeps the
+sampling error of the weight total. A sample can be post-stratified once;
+calibrating to a second set of shares raises.
+
+Variance estimation is delegated to
+[`svy`](https://github.com/samplics-org/svy). For a weighted total after
+post-stratification, geoestimate supplies the linearized values and `svy`
+computes their variance. `svy` runs on polars, which is not safe to use in a
+forked worker after the parent has computed an estimate; start worker
+processes with `spawn` or `forkserver`.
 
 Standard errors treat units as drawn with replacement and apply no finite
 population correction, which overstates variance slightly when the sample is a

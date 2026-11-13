@@ -1,32 +1,30 @@
-"""Shared point-estimation and uncertainty machinery.
+"""Point estimates and uncertainty, with variance estimation delegated to ``svy``."""
 
-The linearization is written here rather than delegated to a survey library.
-Checked November 2026: ``samplics`` announces on import that it is archived,
-and its post-stratified standard errors treat calibrated weights as fixed, so
-they differ from R's ``survey``; its successor ``svy`` is in beta with a
-release every few days. ``tests/test_survey_reference.py`` holds this code to
-R's ``survey`` instead.
-"""
-
-from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Real
+from typing import Literal
 
 import numpy as np
+import polars as pl
+import svy
 from scipy import stats as sp_stats
 
 from .types import Diagnostics, Estimate, InferenceMethod, ResolvedInferenceMethod
 
 
 @dataclass(frozen=True, slots=True)
-class _PreparedEstimand:
-    """Point estimate and linearized contributions for one estimand."""
+class _Estimand:
+    """What to estimate: a weighted mean, a ratio of totals, or a total.
+
+    ``scale`` multiplies a mean into a total when the population size is known.
+    """
 
     name: str
     variables: tuple[str, ...]
-    estimate: float
-    contributions: np.ndarray
-    evaluate: Callable[[np.ndarray], float]
+    kind: Literal["mean", "ratio", "total"]
+    values: np.ndarray
+    denominator: np.ndarray | None = None
+    scale: float = 1.0
     population_size: int | None = None
 
 
@@ -35,167 +33,99 @@ class _Design:
     """Row-level design information shared by every estimand.
 
     ``units`` labels each row's primary sampling unit: its cluster when one is
-    declared, otherwise the row itself. ``unit_strata`` gives the stratum of each
-    unit. ``calibration_cells`` labels post-strata when the weights were
-    calibrated to known shares.
+    declared, otherwise the row itself. ``cells`` and ``cell_shares`` are set
+    when the sample is post-stratified: each row's cell and each cell's known
+    population share.
     """
 
     weights: np.ndarray
     units: np.ndarray
     n_units: int
-    unit_strata: np.ndarray
     row_strata: np.ndarray
     n_strata: int
     has_clusters: bool
-    calibration_cells: np.ndarray | None = None
+    cells: np.ndarray | None = None
+    cell_shares: np.ndarray | None = None
 
 
-def _prepare_mean(
-    values: np.ndarray, variable: str, weights: np.ndarray, name: str = "mean"
-) -> _PreparedEstimand:
-    weight_total = float(np.sum(weights))
-    estimate = float(np.sum(weights * values) / weight_total)
+def _post_stratified_total(estimand: _Estimand, design: _Design) -> _Estimand:
+    """Rewrite a post-stratified total as a plain total of its linearized values.
 
-    def evaluate(rows: np.ndarray) -> float:
-        draw_weights = weights[rows]
-        return float(np.sum(draw_weights * values[rows]) / np.sum(draw_weights))
-
-    return _PreparedEstimand(
-        name=name,
-        variables=(variable,),
-        estimate=estimate,
-        contributions=weights * (values - estimate) / weight_total,
-        evaluate=evaluate,
-    )
-
-
-def _prepare_total(
-    values: np.ndarray, variable: str, population_size: int, weights: np.ndarray
-) -> _PreparedEstimand:
-    """Population size times the weighted mean.
-
-    The weights are all one unless the sample was post-stratified.
+    Shares fix the mix of cells, not the population size, so the total is the
+    estimated size times the post-stratified mean. Its exact first derivative
+    is the value below; ``svy`` substitutes regression residuals, which agree
+    only when the sample's mix is already close to the shares.
     """
-    weight_total = float(np.sum(weights))
-    mean = float(np.sum(weights * values) / weight_total)
+    weights, cells, shares = design.weights, design.cells, design.cell_shares
+    if cells is None or shares is None:
+        raise RuntimeError("the design is not post-stratified")
+    cell_weight = np.bincount(cells, weights=weights)
+    cell_mean = np.bincount(cells, weights=weights * estimand.values) / cell_weight
+    factor = shares * weights.sum() / cell_weight
+    mean = float(np.sum(shares * cell_mean))
+    values = mean + factor[cells] * (estimand.values - cell_mean[cells])
+    return replace(estimand, values=values)
 
-    def evaluate(rows: np.ndarray) -> float:
-        draw_weights = weights[rows]
-        draw_mean = np.sum(draw_weights * values[rows]) / np.sum(draw_weights)
-        return float(population_size * draw_mean)
 
-    return _PreparedEstimand(
-        name="total",
-        variables=(variable,),
-        estimate=population_size * mean,
-        contributions=population_size * weights * (values - mean) / weight_total,
-        evaluate=evaluate,
-        population_size=population_size,
+def _linearized(
+    estimand: _Estimand, design: _Design, *, clustered: bool
+) -> tuple[float, float]:
+    """Return the estimate and its Taylor-linearization standard error."""
+    if estimand.kind == "total" and design.cells is not None:
+        estimand = _post_stratified_total(estimand, design)
+        design = replace(design, cells=None, cell_shares=None)
+    columns = {
+        "weight": design.weights,
+        "unit": design.units,
+        "stratum": design.row_strata,
+        "values": estimand.values,
+    }
+    if estimand.denominator is not None:
+        columns["denominator"] = estimand.denominator
+    if design.cells is not None:
+        columns["cell"] = design.cells
+    sample = svy.Sample(
+        pl.DataFrame(columns),
+        svy.Design(
+            wgt="weight",
+            psu="unit" if clustered else None,
+            stratum="stratum" if design.n_strata > 1 else None,
+        ),
     )
+    if design.cells is not None and design.cell_shares is not None:
+        sample = sample.weighting.poststratify(
+            shares=dict(enumerate(design.cell_shares.tolist())), cells="cell"
+        )
+    estimation = sample.estimation
+    if estimand.kind == "ratio":
+        result = estimation.ratio("values", "denominator")
+    elif estimand.kind == "total":
+        result = estimation.total("values")
+    else:
+        result = estimation.mean("values")
+    if isinstance(result, list):
+        raise TypeError("svy returned several estimates for one variable")
+    row = result.to_polars().row(0, named=True)
+    return estimand.scale * float(row["est"]), estimand.scale * float(row["se"])
 
 
-def _prepare_weighted_total(
-    values: np.ndarray, variable: str, weights: np.ndarray
-) -> _PreparedEstimand:
-    """Horvitz-Thompson total: weights are inverse inclusion probabilities."""
-    return _PreparedEstimand(
-        name="total",
-        variables=(variable,),
-        estimate=float(np.sum(weights * values)),
-        contributions=weights * values,
-        evaluate=lambda rows: float(np.sum(weights[rows] * values[rows])),
-    )
-
-
-def _prepare_ratio(
-    numerator: np.ndarray,
-    denominator: np.ndarray,
-    numerator_name: str,
-    denominator_name: str,
-    weights: np.ndarray,
-) -> _PreparedEstimand:
-    denominator_total = float(np.sum(weights * denominator))
-    estimate = float(np.sum(weights * numerator) / denominator_total)
-
-    def evaluate(rows: np.ndarray) -> float:
-        draw_weights = weights[rows]
-        draw_denominator = float(np.sum(draw_weights * denominator[rows]))
-        if draw_denominator <= 0:
-            return float("nan")
-        return float(np.sum(draw_weights * numerator[rows]) / draw_denominator)
-
-    return _PreparedEstimand(
-        name="ratio",
-        variables=(numerator_name, denominator_name),
-        estimate=estimate,
-        contributions=weights
-        * (numerator - estimate * denominator)
-        / denominator_total,
-        evaluate=evaluate,
-    )
-
-
-def _prepare_mean_of_ratios(
-    numerator: np.ndarray,
-    denominator: np.ndarray,
-    numerator_name: str,
-    denominator_name: str,
-    weights: np.ndarray,
-) -> _PreparedEstimand:
-    ratios = numerator / denominator
-    weight_total = float(np.sum(weights))
-    estimate = float(np.sum(weights * ratios) / weight_total)
-
-    def evaluate(rows: np.ndarray) -> float:
-        draw_weights = weights[rows]
-        return float(np.sum(draw_weights * ratios[rows]) / np.sum(draw_weights))
-
-    return _PreparedEstimand(
-        name="mean_of_ratios",
-        variables=(numerator_name, denominator_name),
-        estimate=estimate,
-        contributions=weights * (ratios - estimate) / weight_total,
-        evaluate=evaluate,
-    )
-
-
-def _calibrated_contributions(contributions: np.ndarray, design: _Design) -> np.ndarray:
-    """Remove what post-stratification already fixes.
-
-    Calibrating weights to known cell shares removes between-cell sampling
-    variation, so only each row's departure from its cell's weighted mean
-    contributes to the variance.
-    """
-    cells = design.calibration_cells
-    if cells is None:
-        return contributions
-    cell_contribution = np.bincount(cells, weights=contributions)
-    cell_weight = np.bincount(cells, weights=design.weights)
-    return contributions - design.weights * (cell_contribution / cell_weight)[cells]
-
-
-def _standard_error(
-    contributions: np.ndarray,
-    units: np.ndarray,
-    n_units: int,
-    unit_strata: np.ndarray,
-    n_strata: int,
-) -> float:
-    """Return the with-replacement linearization standard error.
-
-    Unit totals are centered within strata, so strata contribute no
-    between-stratum variation.
-    """
-    totals = np.bincount(units, weights=contributions, minlength=n_units)
-    counts = np.bincount(unit_strata, minlength=n_strata)
-    means = np.bincount(unit_strata, weights=totals, minlength=n_strata) / counts
-    centered = totals - means[unit_strata]
-    scale = counts / (counts - 1)
-    return float(np.sqrt(np.sum(scale[unit_strata] * centered**2)))
+def _evaluate(estimand: _Estimand, weights: np.ndarray, rows: np.ndarray) -> float:
+    """Point estimate on a resampled set of rows."""
+    draw_weights = weights[rows]
+    numerator = float(np.sum(draw_weights * estimand.values[rows]))
+    if estimand.kind == "total":
+        return estimand.scale * numerator
+    if estimand.denominator is None:
+        denominator = float(np.sum(draw_weights))
+    else:
+        denominator = float(np.sum(draw_weights * estimand.denominator[rows]))
+    if denominator <= 0:
+        return float("nan")
+    return estimand.scale * numerator / denominator
 
 
 def _bootstrap_distribution(
-    estimand: _PreparedEstimand,
+    estimand: _Estimand,
     design: _Design,
     reps: int,
     seed: int | None,
@@ -209,7 +139,7 @@ def _bootstrap_distribution(
     while len(estimates) < reps and attempts < max_attempts:
         draw = rng.integers(0, design.n_units, size=design.n_units)
         rows = np.concatenate([unit_rows[unit] for unit in draw])
-        value = estimand.evaluate(rows)
+        value = _evaluate(estimand, design.weights, rows)
         if np.isfinite(value):
             estimates.append(value)
         attempts += 1
@@ -252,37 +182,30 @@ def _validate_options(
     return inference
 
 
-def _diagnostics(contributions: np.ndarray, design: _Design) -> Diagnostics:
-    rows = np.arange(len(contributions))
-    iid_se = _standard_error(
-        contributions, rows, len(rows), design.row_strata, design.n_strata
-    )
+def _diagnostics(estimand: _Estimand, design: _Design) -> tuple[float, Diagnostics]:
+    """Return the point estimate with the analytic diagnostics."""
+    n_rows = len(design.units)
+    estimate, iid_se = _linearized(estimand, design, clustered=False)
     if not design.has_clusters:
-        return Diagnostics(
+        return estimate, Diagnostics(
             iid_standard_error=iid_se,
             cluster_standard_error=None,
             design_effect=None,
-            effective_sample_size=float(len(contributions)),
+            effective_sample_size=float(n_rows),
             cluster_sizes=None,
             effective_cluster_count=None,
         )
 
-    cluster_se = _standard_error(
-        contributions,
-        design.units,
-        design.n_units,
-        design.unit_strata,
-        design.n_strata,
-    )
+    _, cluster_se = _linearized(estimand, design, clustered=True)
     design_effect = None
-    effective_sample_size = float(len(contributions))
+    effective_sample_size = float(n_rows)
     if iid_se > 0:
         design_effect = (cluster_se / iid_se) ** 2
         if design_effect > 0:
             effective_sample_size /= design_effect
     sizes_array = np.bincount(design.units, minlength=design.n_units)
     effective_clusters = float(sizes_array.sum() ** 2 / np.sum(sizes_array**2))
-    return Diagnostics(
+    return estimate, Diagnostics(
         iid_standard_error=iid_se,
         cluster_standard_error=cluster_se,
         design_effect=design_effect,
@@ -293,7 +216,7 @@ def _diagnostics(contributions: np.ndarray, design: _Design) -> Diagnostics:
 
 
 def _run_inference(
-    estimand: _PreparedEstimand,
+    estimand: _Estimand,
     design: _Design,
     *,
     inference: InferenceMethod,
@@ -305,12 +228,11 @@ def _run_inference(
     resolved = _validate_options(
         inference, confidence_level, bootstrap_reps, seed, design.has_clusters
     )
-    contributions = _calibrated_contributions(estimand.contributions, design)
-    diagnostics = _diagnostics(contributions, design)
+    estimate, diagnostics = _diagnostics(estimand, design)
     alpha = 1 - confidence_level
 
     if resolved == "bootstrap":
-        if design.calibration_cells is not None:
+        if design.cells is not None:
             raise ValueError(
                 "bootstrap inference is not available for post-stratified samples"
             )
@@ -336,14 +258,14 @@ def _run_inference(
             standard_error = diagnostics.iid_standard_error
             critical_value = float(sp_stats.norm.ppf(1 - alpha / 2))
         interval = (
-            estimand.estimate - critical_value * standard_error,
-            estimand.estimate + critical_value * standard_error,
+            estimate - critical_value * standard_error,
+            estimate + critical_value * standard_error,
         )
 
     return Estimate(
         estimand=estimand.name,
         variables=estimand.variables,
-        estimate=estimand.estimate,
+        estimate=estimate,
         standard_error=standard_error,
         confidence_interval=interval,
         confidence_level=confidence_level,

@@ -17,6 +17,11 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- Variance estimation is delegated to `svy`. Because `svy` runs on polars,
+  worker processes must be started with `spawn` or `forkserver`, not `fork`.
+- A weighted total after `post_stratify` keeps the sampling error of the
+  weight total, because shares fix the mix of cells and not the population
+  size.
 - Clustered intervals use clusters minus strata degrees of freedom.
 - Bootstrap inference raises for stratified and post-stratified samples.
 

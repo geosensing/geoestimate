@@ -29,6 +29,23 @@ shares <- c(residential = 0.6, tertiary = 0.25, primary = 0.15)
 clustered <- svydesign(ids = ~psu, weights = ~w, data = data)
 population <- data.frame(cell = names(shares), Freq = shares * sum(data$w))
 
+# Shares fix the mix of cells, not the population size, so a post-stratified
+# total is the estimated size times the post-stratified mean. postStratify()
+# would treat the size as known; the delta method keeps its sampling error.
+cell_totals <- data.frame(
+  y_res = y * (cell == "residential"), n_res = as.numeric(cell == "residential"),
+  y_ter = y * (cell == "tertiary"), n_ter = as.numeric(cell == "tertiary"),
+  y_pri = y * (cell == "primary"), n_pri = as.numeric(cell == "primary")
+)
+by_cell <- svytotal(
+  ~y_res + n_res + y_ter + n_ter + y_pri + n_pri,
+  svydesign(ids = ~psu, weights = ~w, data = cbind(data, cell_totals))
+)
+total_size_estimated <- pair(svycontrast(by_cell, quote(
+  (n_res + n_ter + n_pri) *
+    (0.6 * y_res / n_res + 0.25 * y_ter / n_ter + 0.15 * y_pri / n_pri)
+)))
+
 reference <- list(
   shares = as.list(shares),
   weights = report(svydesign(ids = ~1, weights = ~w, data = data)),
@@ -37,4 +54,5 @@ reference <- list(
   weights_strata_cluster = report(svydesign(ids = ~psu, strata = ~stratum, weights = ~w, data = data)),
   post_stratified = report(postStratify(clustered, ~cell, population))
 )
+reference$post_stratified$total <- total_size_estimated
 write_json(reference, "tests/fixtures/survey_reference.json", auto_unbox = TRUE, digits = 15, pretty = TRUE)
