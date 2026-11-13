@@ -17,8 +17,9 @@ nonresponse or for a collection route that over-represents some roads.
 
 The package does not implement PPS or GRTS variance estimation, finite
 population corrections, annotation-subsampling corrections, or walk-spacing
-corrections. The weighted, stratified, clustered, and post-stratified standard
-errors are tested against R's `survey` package.
+corrections. Linearized standard errors are computed by
+[`svy`](https://github.com/samplics-org/svy) and tested against R's `survey`
+package.
 
 ## Install
 

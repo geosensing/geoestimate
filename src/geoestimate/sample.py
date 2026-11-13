@@ -8,16 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from .inference import (
-    _Design,
-    _prepare_mean,
-    _prepare_mean_of_ratios,
-    _prepare_ratio,
-    _prepare_total,
-    _prepare_weighted_total,
-    _PreparedEstimand,
-    _run_inference,
-)
+from .inference import _Design, _Estimand, _run_inference
 from .types import Estimate, InferenceMethod
 
 
@@ -26,7 +17,8 @@ class Sample:
 
     Notes:
         ``Sample`` supports design weights, strata, clusters, and
-        post-stratification, with linearization or bootstrap inference. Variance
+        post-stratification. Linearized standard errors come from ``svy``;
+        the bootstrap resamples primary units. Variance
         treats primary units as drawn with replacement, so it applies no finite
         population correction. It does not implement PPS or GRTS variance
         estimation.
@@ -113,7 +105,6 @@ class Sample:
             weights=weight_values,
             units=units.astype(int),
             n_units=n_units,
-            unit_strata=unit_strata.astype(int),
             row_strata=row_strata.astype(int),
             n_strata=n_strata,
             has_clusters=cluster is not None,
@@ -153,7 +144,8 @@ class Sample:
         Use this when the sample's mix differs from the population's for a
         reason the design did not intend: uneven nonresponse, or a collection
         route that over-represents some kinds of road. Variance then counts
-        only variation within cells.
+        only variation within cells. The shares fix the mix, not the population
+        size, so a weighted total keeps the sampling error of the weight total.
 
         Args:
             by: Column whose values define the cells.
@@ -167,7 +159,7 @@ class Sample:
             ValueError: If the column or the shares are invalid, or the sample
                 is already post-stratified.
         """
-        if self._design.calibration_cells is not None:
+        if self._design.cells is not None:
             raise ValueError(
                 "the sample is already post-stratified; calibrating to a second "
                 "set of shares is not supported"
@@ -185,15 +177,8 @@ class Sample:
         if np.any(targets <= 0) or not np.isclose(targets.sum(), 1.0):
             raise ValueError("shares must be positive and sum to one")
 
-        design = self._design
-        cell_weight = np.bincount(cells, weights=design.weights)
-        factors = targets * design.weights.sum() / cell_weight
         return self._with_design(
-            replace(
-                design,
-                weights=design.weights * factors[cells],
-                calibration_cells=cells.astype(int),
-            )
+            replace(self._design, cells=cells.astype(int), cell_shares=targets)
         )
 
     def _with_design(self, design: _Design) -> "Sample":
@@ -245,7 +230,7 @@ class Sample:
 
     def _run(
         self,
-        estimand: _PreparedEstimand,
+        estimand: _Estimand,
         *,
         inference: InferenceMethod,
         confidence_level: float,
@@ -272,7 +257,7 @@ class Sample:
     ) -> Estimate:
         """Estimate the population mean of a numeric variable."""
         return self._run(
-            _prepare_mean(self._numeric(variable), variable, self._design.weights),
+            _Estimand("mean", (variable,), "mean", self._numeric(variable)),
             inference=inference,
             confidence_level=confidence_level,
             bootstrap_reps=bootstrap_reps,
@@ -292,9 +277,7 @@ class Sample:
         """Estimate the population share of units at or above a threshold."""
         at_least = (self._numeric(variable) >= threshold).astype(float)
         return self._run(
-            _prepare_mean(
-                at_least, variable, self._design.weights, name="share_at_least"
-            ),
+            _Estimand("share_at_least", (variable,), "mean", at_least),
             inference=inference,
             confidence_level=confidence_level,
             bootstrap_reps=bootstrap_reps,
@@ -339,7 +322,7 @@ class Sample:
                     "population_size is not used with declared weights; the "
                     "weights already scale the sample to the population"
                 )
-            estimand = _prepare_weighted_total(values, variable, self._design.weights)
+            estimand = _Estimand("total", (variable,), "total", values)
         else:
             if population_size is None:
                 raise ValueError("population_size is required without weights")
@@ -349,8 +332,13 @@ class Sample:
                 raise TypeError("population_size must be an integer")
             if population_size < len(self._data):
                 raise ValueError("population_size must be at least the sample size")
-            estimand = _prepare_total(
-                values, variable, population_size, self._design.weights
+            estimand = _Estimand(
+                "total",
+                (variable,),
+                "mean",
+                values,
+                scale=float(population_size),
+                population_size=population_size,
             )
         return self._run(
             estimand,
@@ -378,12 +366,12 @@ class Sample:
         if np.sum(denominator_values) <= 0:
             raise ValueError("denominator must have a positive sample total")
         return self._run(
-            _prepare_ratio(
+            _Estimand(
+                "ratio",
+                (numerator, denominator),
+                "ratio",
                 numerator_values,
                 denominator_values,
-                numerator,
-                denominator,
-                self._design.weights,
             ),
             inference=inference,
             confidence_level=confidence_level,
@@ -407,12 +395,11 @@ class Sample:
         if np.any(denominator_values <= 0):
             raise ValueError("mean_of_ratios requires every denominator to be positive")
         return self._run(
-            _prepare_mean_of_ratios(
-                numerator_values,
-                denominator_values,
-                numerator,
-                denominator,
-                self._design.weights,
+            _Estimand(
+                "mean_of_ratios",
+                (numerator, denominator),
+                "mean",
+                numerator_values / denominator_values,
             ),
             inference=inference,
             confidence_level=confidence_level,
