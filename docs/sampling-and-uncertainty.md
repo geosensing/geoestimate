@@ -25,8 +25,12 @@ mix of cells and not the population size, so a weighted total keeps the
 sampling error of the weight total. A sample can be post-stratified once;
 calibrating to a second set of shares raises.
 
-Estimates and linearized standard errors are computed by
-[`svy`](https://github.com/samplics-org/svy).
+Variance estimation is delegated to
+[`svy`](https://github.com/samplics-org/svy). For a weighted total after
+post-stratification, geoestimate supplies the linearized values and `svy`
+computes their variance. `svy` runs on polars, which is not safe to use in a
+forked worker after the parent has computed an estimate; start worker
+processes with `spawn` or `forkserver`.
 
 Standard errors treat units as drawn with replacement and apply no finite
 population correction, which overstates variance slightly when the sample is a

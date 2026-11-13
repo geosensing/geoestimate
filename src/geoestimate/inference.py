@@ -1,6 +1,6 @@
-"""Point estimates and uncertainty, with linearization delegated to ``svy``."""
+"""Point estimates and uncertainty, with variance estimation delegated to ``svy``."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Real
 from typing import Literal
 
@@ -48,10 +48,32 @@ class _Design:
     cell_shares: np.ndarray | None = None
 
 
+def _post_stratified_total(estimand: _Estimand, design: _Design) -> _Estimand:
+    """Rewrite a post-stratified total as a plain total of its linearized values.
+
+    Shares fix the mix of cells, not the population size, so the total is the
+    estimated size times the post-stratified mean. Its exact first derivative
+    is the value below; ``svy`` substitutes regression residuals, which agree
+    only when the sample's mix is already close to the shares.
+    """
+    weights, cells, shares = design.weights, design.cells, design.cell_shares
+    if cells is None or shares is None:
+        raise RuntimeError("the design is not post-stratified")
+    cell_weight = np.bincount(cells, weights=weights)
+    cell_mean = np.bincount(cells, weights=weights * estimand.values) / cell_weight
+    factor = shares * weights.sum() / cell_weight
+    mean = float(np.sum(shares * cell_mean))
+    values = mean + factor[cells] * (estimand.values - cell_mean[cells])
+    return replace(estimand, values=values)
+
+
 def _linearized(
     estimand: _Estimand, design: _Design, *, clustered: bool
 ) -> tuple[float, float]:
     """Return the estimate and its Taylor-linearization standard error."""
+    if estimand.kind == "total" and design.cells is not None:
+        estimand = _post_stratified_total(estimand, design)
+        design = replace(design, cells=None, cell_shares=None)
     columns = {
         "weight": design.weights,
         "unit": design.units,

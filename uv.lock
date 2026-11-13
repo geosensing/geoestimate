@@ -492,7 +492,7 @@ requires-dist = [
     { name = "geo-sampling", marker = "extra == 'pipeline'" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "pandas", specifier = ">=3.0.5" },
-    { name = "polars", specifier = ">=1.0" },
+    { name = "polars", specifier = ">=2.0" },
     { name = "pyarrow", specifier = ">=15" },
     { name = "scipy", specifier = ">=1.10.0" },
     { name = "svy", specifier = ">=0.37.0,<0.38" },

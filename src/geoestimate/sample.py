@@ -153,7 +153,7 @@ class Sample:
                 to one, and name exactly the cells present in the sample.
 
         Returns:
-            A new sample with calibrated weights.
+            A new sample whose estimates are calibrated to the shares.
 
         Raises:
             ValueError: If the column or the shares are invalid, or the sample

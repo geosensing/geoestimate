@@ -41,11 +41,8 @@ def test_matches_r_survey(data: pd.DataFrame, design: str, estimand: str) -> Non
         "share_at_least": lambda: sample.share_at_least("level", 62),
     }[estimand]()
     expected = REFERENCE[design][estimand]
-    # R's reference for the post-stratified total is the exact delta method;
-    # svy uses regression residuals, which agree only to first order.
-    tolerance = 1e-3 if (design, estimand) == ("post_stratified", "total") else 1e-8
     assert estimate.estimate == pytest.approx(expected["estimate"], rel=1e-8)
-    assert estimate.standard_error == pytest.approx(expected["se"], rel=tolerance)
+    assert estimate.standard_error == pytest.approx(expected["se"], rel=1e-8)
 
 
 def test_unit_weights_reproduce_unweighted_estimates(data: pd.DataFrame) -> None:
