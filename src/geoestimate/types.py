@@ -79,7 +79,7 @@ class Estimate:
 
     def to_frame(self) -> pd.DataFrame:
         """Return the scalar result as a one-row tidy table."""
-        is_univariate = self.estimand in {"mean", "total"}
+        is_univariate = self.estimand in {"mean", "total", "share_at_least"}
         return pd.DataFrame(
             [
                 {

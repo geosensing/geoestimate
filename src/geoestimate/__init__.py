@@ -1,4 +1,4 @@
-"""Design-aware estimation for equal-probability observation samples.
+"""Design-aware estimation for spatial observation samples.
 
 Quick start:
     >>> import pandas as pd

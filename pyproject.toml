@@ -5,13 +5,13 @@ build-backend = "uv_build"
 [project]
 name = "geoestimate"
 version = "0.1.1"
-description = "Design-aware estimation for equal-probability observation samples"
+description = "Design-aware estimation for spatial observation samples"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    {name = "Gaurav Sood", email = "gsood07@gmail.com"},
+    {name = "Gaurav Sood", email = "contact@gsood.com"},
 ]
 keywords = [
     "spatial-statistics", "survey-inference", "design-based",
@@ -31,7 +31,9 @@ dependencies = [
     "pandas>=3.0.5",
     # pandas.read_parquet needs an engine; pyarrow is the one it prefers.
     "pyarrow>=15",
+    "polars>=2.0",
     "scipy>=1.10.0",
+    "svy>=0.37.0,<0.38",
 ]
 
 [project.scripts]
