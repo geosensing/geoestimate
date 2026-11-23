@@ -27,7 +27,7 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "numpy>=1.24.0",
+    "numpy>=2.5.5",
     "pandas>=3.1.1",
     # pandas.read_parquet needs an engine; pyarrow is the one it prefers.
     "pyarrow>=26.0.1",
@@ -68,7 +68,7 @@ allow-init-docstring = true
 exclude = '\.venv|tests|docs'
 
 [dependency-groups]
-dev = ["ruff>=0.17.4", "pandas-stubs", "scipy-stubs", "pyright>=1.1.390", "pydoclint>=0.5", "pytest>=8"]
+dev = ["ruff>=0.17.5", "pandas-stubs", "scipy-stubs", "pyright>=1.1.390", "pydoclint>=0.5", "pytest>=8"]
 test = [
     "pytest>=9.1.1",
     "pytest-cov>=4.1.0",
@@ -79,11 +79,11 @@ test = [
 docs = [
     "sphinx>=7.0",
     "furo",
-    "myst-parser>=2.0",
+    "myst-parser>=5.2.0",
     "linkify-it-py>=2.0",
     "sphinx-copybutton>=0.5",
-    "sphinx-design>=0.5",
-    "soupsieve>=2.9.0",
+    "sphinx-design>=0.8.0",
+    "soupsieve>=4.1.1",
     "py-canon @ git+https://github.com/gojiplus/py-canon@v1.3.0",
 ]
 
