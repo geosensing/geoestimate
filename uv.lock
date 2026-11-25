@@ -438,13 +438,13 @@ test = [
 
 [package.metadata]
 requires-dist = [
-    { name = "allocator", marker = "extra == 'pipeline'" },
-    { name = "geo-sampling", marker = "extra == 'pipeline'" },
+    { name = "allocator", marker = "extra == 'pipeline'", specifier = ">=1.1.0" },
+    { name = "geo-sampling", marker = "extra == 'pipeline'", specifier = ">=0.1.2" },
     { name = "numpy", specifier = ">=2.5.5" },
     { name = "pandas", specifier = ">=3.1.1" },
     { name = "polars", specifier = ">=2.0" },
     { name = "pyarrow", specifier = ">=26.0.1" },
-    { name = "scipy", specifier = ">=1.10.0" },
+    { name = "scipy", specifier = ">=1.14.1" },
     { name = "svy", specifier = ">=0.37.0,<0.38" },
 ]
 provides-extras = ["pipeline"]
