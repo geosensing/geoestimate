@@ -22,6 +22,7 @@ jobs:
   ci:
     uses: gojiplus/py-canon/.github/workflows/reusable-ci.yml@v1
     with:
+      run-lower-bounds: true
       wheel-import: geoestimate
       python-versions: '["3.13", "3.14"]'
       # Measured 83%; three points of headroom.

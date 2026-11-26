@@ -31,7 +31,7 @@ dependencies = [
     # pandas.read_parquet needs an engine; pyarrow is the one it prefers.
     "pyarrow>=26.0.1",
     "polars>=2.0",
-    "scipy>=1.10.0",
+    "scipy>=1.16.0",
     "svy>=0.37.0,<0.38",
 ]
 
@@ -47,7 +47,7 @@ Issues = "https://github.com/geosensing/geoestimate/issues"
 [project.optional-dependencies]
 # The real geo_sampling to allocator pipeline, used by geoestimate.pipeline and the
 # validation example. Imported lazily; core geoestimate needs none of it.
-pipeline = ["allocator", "geo-sampling"]
+pipeline = ["allocator>=1.1.0", "geo-sampling>=0.1.2"]
 
 [tool.uv.build-backend]
 module-name = "geoestimate"
