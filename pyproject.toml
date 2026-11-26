@@ -31,7 +31,7 @@ dependencies = [
     # pandas.read_parquet needs an engine; pyarrow is the one it prefers.
     "pyarrow>=26.0.1",
     "polars>=2.0",
-    "scipy>=1.14.1",
+    "scipy>=1.16.0",
     "svy>=0.37.0,<0.38",
 ]
 
